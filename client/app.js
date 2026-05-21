@@ -735,6 +735,15 @@ function exitGame() {
     gameState = null; gameId = null;
 }
 
+function confirmExit() {
+    if (!confirm('Vuoi uscire dalla partita?')) return;
+    document.getElementById('stats-overlay')?.classList.add('hidden');
+    document.getElementById('game-screen').style.display = 'none';
+    document.getElementById('setup-screen').style.display = '';
+    gameState = null; gameId = null; pendingDefense = null; pendingConquest = null;
+    territoryHistory = []; gameStats = {attacks:0,conquests:0,troopsLost:0,troopsKilled:0};
+}
+
 // ===== JSON SAVE/LOAD =====
 function saveGame() {
     if (!gameState) { showToast('Nessuna partita in corso'); return; }
