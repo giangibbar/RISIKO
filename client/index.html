@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⚔️ RISIKO</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- SETUP SCREEN -->
+    <div id="setup-screen">
+        <h1>⚔️ RISIKO</h1>
+        <p class="subtitle">Conquista il mondo — un territorio alla volta</p>
+        <div class="setup-form">
+            <h2>Nuova Partita</h2>
+            <label class="setup-label">Giocatori totali</label>
+            <select id="total-players" onchange="updateSetupForm()">
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+            </select>
+            <label class="setup-label">Di cui umani</label>
+            <select id="human-players" onchange="updateSetupForm()">
+                <option value="1" selected>1</option>
+            </select>
+            <label class="setup-label">Difficoltà CPU</label>
+            <select id="ai-difficulty">
+                <option value="easy">🟢 Facile</option>
+                <option value="medium" selected>🟡 Medio</option>
+                <option value="hard">🔴 Difficile</option>
+            </select>
+            <div id="player-names-container"></div>
+            <button onclick="createGame()">🎲 Inizia Partita</button>
+        </div>
+    </div>
+
+    <!-- GAME SCREEN -->
+    <div id="game-screen">
+        <!-- Fullscreen map -->
+        <div id="map-wrapper"></div>
+
+        <!-- SVG overlay for attack lines -->
+        <svg id="attack-lines" pointer-events="none"></svg>
+
+        <!-- LEFT: Player buttons -->
+        <div id="left-panel"></div>
+
+        <!-- TOP CENTER: Phase bar -->
+        <div id="phase-bar">
+            <span id="phase-player-indicator"></span>
+            <span id="phase-text"></span>
+            <span id="phase-extra"></span>
+        </div>
+
+        <!-- RIGHT: Action buttons -->
+        <div id="right-buttons">
+            <button class="right-btn" id="btn-objective" onclick="togglePanel('objective')">🎯</button>
+            <button class="right-btn" id="btn-cards" onclick="togglePanel('cards')">🃏</button>
+            <button class="right-btn" id="btn-log" onclick="togglePanel('log')">📋</button>
+            <button class="right-btn" id="btn-names" onclick="toggleNames()">Aa</button>
+            <button class="right-btn" id="btn-sound" onclick="toggleSoundBtn()">🔊</button>
+            <button class="right-btn" id="btn-skip" onclick="toggleSkipAnimations()">⏩</button>
+            <button class="right-btn" id="btn-save" onclick="saveGame()">💾</button>
+            <button class="right-btn" id="btn-load" onclick="document.getElementById('load-input').click()">📂</button>
+            <input type="file" id="load-input" accept=".json" style="display:none" onchange="loadGame(event)">
+        </div>
+
+        <!-- RIGHT: Expandable panels -->
+        <div id="panel-objective" class="slide-panel hidden">
+            <div class="panel-header">🎯 Obiettivo Segreto</div>
+            <div id="objective-content"></div>
+        </div>
+        <div id="panel-cards" class="slide-panel hidden">
+            <div class="panel-header">🃏 Carte Conquista</div>
+            <div id="cards-content"></div>
+        </div>
+        <div id="panel-log" class="slide-panel hidden">
+            <div class="panel-header">📋 Registro Azioni</div>
+            <div id="log-content"></div>
+        </div>
+
+        <!-- BOTTOM CENTER: Dice result -->
+        <div id="dice-display"></div>
+
+        <!-- End-game stats overlay -->
+        <div id="stats-overlay" class="hidden"></div>
+
+        <!-- BOTTOM CENTER: Action controls (context-sensitive) -->
+        <div id="action-bar"></div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast"></div>
+
+    <script src="/static/sounds.js"></script>
+    <script src="/static/dice.js"></script>
+    <script src="/static/app.js"></script>
+    <script>
+        fetch('/static/assets/world.svg')
+            .then(r => r.text())
+            .then(svg => {
+                document.getElementById('map-wrapper').innerHTML = svg;
+                initMap();
+            });
+    </script>
+</body>
+</html>

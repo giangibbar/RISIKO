@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+regolamento.pdf
+tutorial.html
+reference.png
+generate_map.py
+client/assets/risk_board_wiki.svg
