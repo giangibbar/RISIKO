@@ -2,18 +2,28 @@
 
 import json
 from typing import Dict, List
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .models import (
     CreateGameRequest, PlaceTroopsRequest, AttackRequest,
     FortifyRequest, TradeCardsRequest, GamePhase,
 )
 from .game_engine import GameEngine
-from .ai_player import ai_play_turn
+from .ai_player import ai_play_turn, reset_card_memory
+from .tournament import (
+    create_tournament, record_match_result, get_tournament,
+    get_elo_rankings, TournamentState,
+)
 
 app = FastAPI(title="Risiko", version="1.0.0")
+
+
+@app.exception_handler(ValueError)
+async def value_error_handler(request: Request, exc: ValueError):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
 
 # Game storage (in-memory for now)
 games: Dict[str, GameEngine] = {}
@@ -257,6 +267,76 @@ async def load_game(state: dict):
     games[game.id] = engine
     connections[game.id] = []
     return {"game_id": game.id, "state": engine.game.model_dump()}
+
+
+# --- Tournament Endpoints ---
+
+@app.post("/api/tournaments")
+async def create_tournament_endpoint(req: CreateGameRequest, best_of: int = 3):
+    """Create a new tournament (best of N)."""
+    if not 2 <= len(req.player_names) <= 6:
+        raise HTTPException(400, "Need 2-6 players")
+    ai_players = req.ai_players or [False] * len(req.player_names)
+    tournament = create_tournament(
+        req.player_names, req.player_colors, ai_players,
+        req.ai_difficulty, best_of
+    )
+    return {"tournament_id": tournament.id, "tournament": tournament.model_dump()}
+
+
+@app.get("/api/tournaments/{tournament_id}")
+async def get_tournament_endpoint(tournament_id: str):
+    """Get tournament state."""
+    t = get_tournament(tournament_id)
+    if not t:
+        raise HTTPException(404, "Tournament not found")
+    return t.model_dump()
+
+
+@app.post("/api/tournaments/{tournament_id}/next_match")
+async def start_next_match(tournament_id: str):
+    """Start the next match in the tournament."""
+    t = get_tournament(tournament_id)
+    if not t:
+        raise HTTPException(404, "Tournament not found")
+    if t.winner:
+        raise HTTPException(400, "Tournament already finished")
+
+    # Create a new game with the same players
+    names = [p.name for p in t.players]
+    colors = [p.color for p in t.players]
+    ai_flags = [p.is_ai for p in t.players]
+    difficulty = t.players[0].ai_difficulty
+
+    engine = GameEngine.create_game(names, colors, ai_flags, difficulty)
+    games[engine.game.id] = engine
+    connections[engine.game.id] = []
+    t.current_game_id = engine.game.id
+
+    return {"game_id": engine.game.id, "state": engine.game.model_dump(), "match_number": t.current_match + 1}
+
+
+@app.post("/api/tournaments/{tournament_id}/record_result")
+async def record_result(tournament_id: str, winner_name: str, turns: int):
+    """Record match result and advance tournament."""
+    t = get_tournament(tournament_id)
+    if not t:
+        raise HTTPException(404, "Tournament not found")
+    if t.winner:
+        raise HTTPException(400, "Tournament already finished")
+
+    # Clean up old game card memory
+    if t.current_game_id:
+        reset_card_memory(t.current_game_id)
+
+    t = record_match_result(tournament_id, winner_name, turns)
+    return t.model_dump()
+
+
+@app.get("/api/elo")
+async def get_elo():
+    """Get ELO rankings."""
+    return {"rankings": get_elo_rankings()}
 
 
 # --- WebSocket ---

@@ -31,9 +31,15 @@
                 <option value="medium" selected>🟡 Medio</option>
                 <option value="hard">🔴 Difficile</option>
             </select>
+            <label class="setup-label">Modalità</label>
+            <div class="mode-options">
+                <label class="mode-check"><input type="checkbox" id="speed-mode"> ⚡ Speed Mode (10s per turno)</label>
+            </div>
             <div id="player-names-container"></div>
             <button onclick="createGame()">🎲 Inizia Partita</button>
+            <button onclick="createTournament()" class="btn-tournament">🏆 Torneo (Best of 3)</button>
         </div>
+        <div id="elo-section" class="elo-section"></div>
     </div>
 
     <!-- GAME SCREEN -->
@@ -51,6 +57,7 @@
         <div id="phase-bar">
             <span id="phase-player-indicator"></span>
             <span id="phase-text"></span>
+            <span id="speed-timer" class="hidden"></span>
             <span id="phase-extra"></span>
         </div>
 
@@ -66,6 +73,7 @@
             <button class="right-btn" id="btn-load" onclick="document.getElementById('load-input').click()">📂</button>
             <input type="file" id="load-input" accept=".json" style="display:none" onchange="loadGame(event)">
             <button class="right-btn" id="btn-exit" onclick="confirmExit()" title="Esci/Riavvia">✖</button>
+            <button class="right-btn" id="btn-achievements" onclick="togglePanel('achievements')" title="Achievements">🏅</button>
         </div>
 
         <!-- RIGHT: Expandable panels -->
@@ -81,12 +89,19 @@
             <div class="panel-header">📋 Registro Azioni</div>
             <div id="log-content"></div>
         </div>
+        <div id="panel-achievements" class="slide-panel hidden">
+            <div class="panel-header">🏅 Achievements</div>
+            <div id="achievements-content"></div>
+        </div>
 
         <!-- BOTTOM CENTER: Dice result -->
         <div id="dice-display"></div>
 
         <!-- End-game stats overlay -->
         <div id="stats-overlay" class="hidden"></div>
+
+        <!-- Tournament progress overlay -->
+        <div id="tournament-overlay" class="hidden"></div>
 
         <!-- BOTTOM CENTER: Action controls (context-sensitive) -->
         <div id="action-bar"></div>

@@ -6,12 +6,16 @@ Un clone completo del gioco da tavolo **RisiKo!** giocabile nel browser, con AI 
 
 ## 🎮 Features
 
-- **Mappa mondo interattiva** — SVG da Wikipedia con 42 territori cliccabili, zoom/pan
+- **Mappa mondo interattiva** — SVG da Wikipedia con 42 territori cliccabili, zoom/pan, nomi sempre visibili
 - **Regole ufficiali italiane** — difensore 3 dadi, tris carte (4/6/8/10/12), obiettivi segreti, spostamento tra territori connessi
-- **AI con personalità** — 3 livelli di difficoltà × 3 personalità (aggressivo, difensivo, espansionista) + trash talk
+- **AI intelligente** — 3 livelli × 3 personalità + memoria carte, valutazione rischio, difesa continenti, trash talk
 - **3-6 giocatori** — umani e/o CPU, hot-seat
 - **Lancia i dadi di difesa** — quando l'AI ti attacca, sei TU a premere il pulsante
-- **Interfaccia stile RisikoPlay** — mappa fullscreen, pannelli overlay, frecce attacco animate
+- **Modalità Torneo** — best of 3, classifica ELO locale persistente
+- **Speed Mode** — turni da 10 secondi, chi non agisce perde il turno
+- **Achievements** — 10 obiettivi sbloccabili con notifiche popup
+- **Animazioni** — dadi 3D con CSS transforms, truppe che volano tra territori, particelle su conquista
+- **Interfaccia stile RisikoPlay** — mappa fullscreen, pannelli overlay, frecce attacco animate, colori continente vivaci
 - **Suoni** — effetti audio generati con Web Audio API
 - **Salva/Carica** — esporta partita come JSON, riprendi quando vuoi
 - **Tutorial** — guida interattiva alla prima partita

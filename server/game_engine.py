@@ -27,7 +27,7 @@ class GameEngine:
         self.game = game
 
     @classmethod
-    def create_game(cls, player_names: List[str], player_colors: List[str], ai_players: List[bool] = None, ai_difficulty: str = "medium") -> "GameEngine":
+    def create_game(cls, player_names: List[str], player_colors: List[str], ai_players: List[bool] = None, ai_difficulty: str = "medium", map_variant: str = "classic") -> "GameEngine":
         """Create a new game with random territory assignment."""
         num_players = len(player_names)
         if not 2 <= num_players <= 6:
@@ -63,7 +63,6 @@ class GameEngine:
         initial = INITIAL_TROOPS[num_players]
         setup_remaining = {}
         for p in players:
-            # Already placed 1 per territory during distribution
             setup_remaining[p.id] = initial - len(p.territories)
 
         game = GameState(
@@ -76,7 +75,6 @@ class GameEngine:
         )
 
         engine = cls(game)
-        # If no setup troops remain, skip to reinforce
         if all(v <= 0 for v in setup_remaining.values()):
             engine._start_turn()
         return engine
@@ -206,6 +204,8 @@ class GameEngine:
         if player.troops_to_place <= 0:
             self.game.phase = GamePhase.ATTACK
 
+        self._check_win(player_id)
+
         return f"Placed {troops} on {territory} ({player.troops_to_place} remaining)"
 
     def undo_reinforce(self, player_id: int) -> str:
@@ -333,6 +333,13 @@ class GameEngine:
             defender.cards.clear()
 
         # Check win condition
+        self._check_win(player_id)
+
+    def _check_win(self, player_id: int):
+        """Check if player has won (elimination or objective)."""
+        if self.game.phase == GamePhase.GAME_OVER:
+            return
+        player = self.game.players[player_id]
         alive_players = [p for p in self.game.players if p.alive]
         if len(alive_players) == 1:
             self.game.phase = GamePhase.GAME_OVER
@@ -357,6 +364,7 @@ class GameEngine:
 
         self.game.territories[from_t].troops -= troops
         self.game.territories[to_t].troops += troops
+        self._check_win(player_id)
         return f"Moved {troops} troops from {from_t} to {to_t}"
 
     # --- FORTIFY PHASE ---
@@ -377,6 +385,10 @@ class GameEngine:
 
         self.game.territories[from_t].troops -= troops
         self.game.territories[to_t].troops += troops
+
+        self._check_win(player_id)
+        if self.game.phase == GamePhase.GAME_OVER:
+            return f"Moved {troops} from {from_t} to {to_t}"
 
         # Fortify ends the turn
         player = self._current_player()

@@ -6,8 +6,8 @@
 const COLORS = ['#e63946', '#2563eb', '#2a9d8f', '#f4d35e', '#222222', '#7b2d8b'];
 const COLOR_NAMES = ['ROSSA', 'BLU', 'VERDE', 'GIALLA', 'NERA', 'VIOLA'];
 const CONTINENT_COLORS = {
-    north_america: '#4a7a3a', south_america: '#a84832', europe: '#3a6a9e',
-    africa: '#b8882a', asia: '#5a8e3a', oceania: '#7a4e90',
+    north_america: '#5cb85c', south_america: '#d9534f', europe: '#5bc0de',
+    africa: '#f0ad4e', asia: '#6b8e23', oceania: '#9b59b6',
 };
 const CONTINENTS_MAP = {
     north_america: ['alaska','northwest_territory','greenland','alberta','ontario','quebec','western_us','eastern_us','central_america'],
@@ -95,12 +95,14 @@ function renderMap() {
         const path = document.getElementById(tid);
         if (!path) continue;
         path.style.fill = CONTINENT_COLORS[TERRITORY_CONTINENT[tid]] || '#555';
-        path.classList.remove('selected', 'target', 'attackable');
+        path.classList.remove('selected', 'target', 'attackable', 'reachable');
         if (tid === selectedTerritory) path.classList.add('selected');
         else if (tid === targetTerritory) path.classList.add('target');
         else if (selectedTerritory && gameState.phase === 'attack' && st.owner !== gameState.players[myPlayerIndex].id) {
             // Highlight attackable enemies adjacent to selected
             if (getNeighbors(selectedTerritory).includes(tid)) path.classList.add('attackable');
+        } else if (selectedTerritory && !targetTerritory && gameState.phase === 'fortify' && st.owner === myId) {
+            if (getNeighbors(selectedTerritory).includes(tid)) path.classList.add('reachable');
         }
 
         // Update circle + label
@@ -320,7 +322,20 @@ function togglePanel(name) {
         document.querySelectorAll('.slide-panel').forEach(p => p.classList.add('hidden'));
         document.querySelectorAll('.right-btn').forEach(b => b.classList.remove('open'));
         panel.classList.remove('hidden'); btn.classList.add('open'); openPanel = name;
+        if (name === 'achievements') renderAchievementsPanel();
     }
+}
+
+function renderAchievementsPanel() {
+    const unlocked = loadAchievements();
+    const el = document.getElementById('achievements-content');
+    el.innerHTML = Object.entries(ACHIEVEMENTS).map(([id, a]) => {
+        const done = unlocked[id];
+        return `<div class="ach-row ${done ? 'unlocked' : 'locked'}">
+            <span class="ach-icon">${a.icon}</span>
+            <div class="ach-info"><b>${a.name}</b><br><small>${a.desc}</small>${done ? `<br><small style="color:#2ecc71">✓ ${done.date}</small>` : ''}</div>
+        </div>`;
+    }).join('');
 }
 
 function toggleCard(idx) {
@@ -343,7 +358,7 @@ function onTerritoryClick(tid) {
     const t = gameState.territories[tid];
 
     if (gameState.phase === 'setup') { if (t.owner === p.id) placeSetup(tid); else showToast('Solo tuoi territori!'); }
-    else if (gameState.phase === 'reinforce') { if (t.owner === p.id) placeReinforce(tid); else showToast('Solo tuoi territori!'); }
+    else if (gameState.phase === 'reinforce') { if (gameState.players[gameState.current_player].troops_to_place < 1) return; if (t.owner === p.id) placeReinforce(tid); else showToast('Solo tuoi territori!'); }
     else if (gameState.phase === 'attack') {
         if (t.owner === p.id) {
             if (t.troops < 2) { showToast('Servono almeno 2 armate!'); return; }
@@ -394,6 +409,7 @@ async function doAttack(dice) {
         gameState = res.state;
         if (gameState.territories[target]?.owner === gameState.players[gameState.current_player]?.id) {
             log(`🏴 ${formatName(target)} conquistato!`);
+            animateTroopMovement(from, target, dice);
             flashConquest(target);
             gameStats.conquests++;
             // Show troop movement slider
@@ -477,6 +493,7 @@ async function checkAiTurn() {
                     gameState = res.state;
                     renderAll();
                     if (gameState.territories[atk.to]?.owner === currentPlayer.id) {
+                        animateTroopMovement(atk.from, atk.to, atk.dice);
                         flashConquest(atk.to);
                         log(`🏴 ${currentPlayer.name} conquista ${formatName(atk.to)}!`);
                         await sleep(800);
@@ -494,7 +511,7 @@ async function checkAiTurn() {
                 if (d.state) { gameState = d.state; renderAll(); }
                 if (d.log.action === 'end_turn') { done = true; }
                 // Longer delay for reinforce so user sees troop placement
-                await sleep(d.log.action === 'reinforce' ? 500 : 250);
+                await sleep(d.log.action === 'reinforce' ? 150 : 250);
             } catch(e) { done = true; }
         }
     }
@@ -548,6 +565,7 @@ function getNeighbors(tid) {
     const ADJ = {alaska:['northwest_territory','alberta','kamchatka'],northwest_territory:['alaska','alberta','ontario','greenland'],greenland:['northwest_territory','ontario','quebec','iceland'],alberta:['alaska','northwest_territory','ontario','western_us'],ontario:['northwest_territory','greenland','alberta','quebec','western_us','eastern_us'],quebec:['ontario','greenland','eastern_us'],western_us:['alberta','ontario','eastern_us','central_america'],eastern_us:['ontario','quebec','western_us','central_america'],central_america:['western_us','eastern_us','venezuela'],venezuela:['central_america','peru','brazil'],peru:['venezuela','brazil','argentina'],brazil:['venezuela','peru','argentina','north_africa'],argentina:['peru','brazil'],iceland:['greenland','scandinavia','great_britain'],scandinavia:['iceland','great_britain','northern_europe','ukraine'],great_britain:['iceland','scandinavia','northern_europe','western_europe'],northern_europe:['scandinavia','great_britain','western_europe','southern_europe','ukraine'],western_europe:['great_britain','northern_europe','southern_europe','north_africa'],southern_europe:['northern_europe','western_europe','ukraine','north_africa','egypt','middle_east'],ukraine:['scandinavia','northern_europe','southern_europe','ural','afghanistan','middle_east'],north_africa:['brazil','western_europe','southern_europe','egypt','east_africa','congo'],egypt:['southern_europe','north_africa','east_africa','middle_east'],east_africa:['north_africa','egypt','congo','south_africa','madagascar','middle_east'],congo:['north_africa','east_africa','south_africa'],south_africa:['congo','east_africa','madagascar'],madagascar:['east_africa','south_africa'],ural:['ukraine','siberia','china','afghanistan'],siberia:['ural','yakutsk','irkutsk','mongolia','china'],yakutsk:['siberia','irkutsk','kamchatka'],kamchatka:['alaska','yakutsk','irkutsk','mongolia','japan'],irkutsk:['siberia','yakutsk','kamchatka','mongolia'],mongolia:['siberia','irkutsk','kamchatka','china','japan'],japan:['kamchatka','mongolia'],afghanistan:['ukraine','ural','china','india','middle_east'],china:['ural','siberia','mongolia','afghanistan','india','siam'],india:['afghanistan','china','siam','middle_east'],siam:['china','india','indonesia'],middle_east:['southern_europe','ukraine','egypt','east_africa','afghanistan','india'],indonesia:['siam','new_guinea','western_australia'],new_guinea:['indonesia','western_australia','eastern_australia'],western_australia:['indonesia','new_guinea','eastern_australia'],eastern_australia:['new_guinea','western_australia']};
     return ADJ[tid] || [];
 }
+
 
 // ===== INIT MAP =====
 function initMap() {
@@ -608,7 +626,7 @@ function initMap() {
         t.setAttribute('x', pos.x.toFixed(1));
         t.setAttribute('y', (pos.y - 12).toFixed(1));
         t.setAttribute('class', 'territory-name');
-        t.textContent = formatName(tid);
+        t.textContent = formatName(tid).replace('Northwest Territory','NW Terr.').replace('Eastern Australia','E. Australia').replace('Western Australia','W. Australia').replace('Northern Europe','N. Europe').replace('Western Europe','W. Europe').replace('Southern Europe','S. Europe').replace('Central America','C. America').replace('North Africa','N. Africa').replace('East Africa','E. Africa').replace('South Africa','S. Africa');
         namesGroup.appendChild(t);
     }
     svgEl.appendChild(namesGroup);
@@ -624,17 +642,18 @@ function initMap() {
 // ===== DICE =====
 function animateDice(att, def) {
     const el = document.getElementById('dice-display');
+    el.innerHTML = `<div class="dice-group">${att.map(() => `<span class="die att dice3d">${Math.ceil(Math.random()*6)}</span>`).join('')}</div><span class="vs">VS</span><div class="dice-group">${def.map(() => `<span class="die def dice3d">${Math.ceil(Math.random()*6)}</span>`).join('')}</div>`;
 
     let frame = 0;
     const interval = setInterval(() => {
-        el.innerHTML = `<div class="dice-group">${att.map(() => `<span class="die att">${Math.ceil(Math.random()*6)}</span>`).join('')}</div><span class="vs">VS</span><div class="dice-group">${def.map(() => `<span class="die def">${Math.ceil(Math.random()*6)}</span>`).join('')}</div>`;
+        el.querySelectorAll('.die').forEach(d => { d.textContent = Math.ceil(Math.random()*6); });
         frame++;
-        if (frame >= 6) {
+        if (frame >= 8) {
             clearInterval(interval);
-            el.innerHTML = `<div class="dice-group">${att.map(d => `<span class="die att">${d}</span>`).join('')}</div><span class="vs">VS</span><div class="dice-group">${def.map(d => `<span class="die def">${d}</span>`).join('')}</div>`;
+            el.innerHTML = `<div class="dice-group">${att.map(d => `<span class="die att dice3d-land">${d}</span>`).join('')}</div><span class="vs">VS</span><div class="dice-group">${def.map(d => `<span class="die def dice3d-land">${d}</span>`).join('')}</div>`;
             setTimeout(() => { el.innerHTML = ''; }, 3500);
         }
-    }, 100);
+    }, 80);
 }
 
 
@@ -642,17 +661,74 @@ function animateDice(att, def) {
 function flashConquest(tid) {
     const path = document.getElementById(tid);
     if (path) { path.classList.add('conquered'); setTimeout(() => path.classList.remove('conquered'), 1800); }
+    spawnParticles(tid);
     playConquest();
 }
 
+// ===== TROOP MOVEMENT ANIMATION =====
+function animateTroopMovement(fromTid, toTid, count) {
+    const from = labelPositions[fromTid];
+    const to = labelPositions[toTid];
+    if (!from || !to) return;
+
+    const svg = document.getElementById('attack-lines');
+    const ns = 'http://www.w3.org/2000/svg';
+
+    for (let i = 0; i < Math.min(count, 5); i++) {
+        setTimeout(() => {
+            const circle = document.createElementNS(ns, 'circle');
+            circle.setAttribute('r', '3');
+            circle.setAttribute('fill', '#ffdd44');
+            circle.setAttribute('opacity', '0.9');
+            const anim = document.createElementNS(ns, 'animateMotion');
+            anim.setAttribute('dur', '0.6s');
+            anim.setAttribute('fill', 'freeze');
+            anim.setAttribute('path', `M${from.x},${from.y} L${to.x},${to.y}`);
+            circle.appendChild(anim);
+            svg.appendChild(circle);
+            setTimeout(() => circle.remove(), 700);
+        }, i * 120);
+    }
+}
+
+// ===== PARTICLE EFFECTS =====
+function spawnParticles(tid) {
+    const pos = labelPositions[tid];
+    if (!pos) return;
+    const svg = document.getElementById('attack-lines');
+    const ns = 'http://www.w3.org/2000/svg';
+    const colors = ['#ff4444', '#ffaa00', '#ffff44', '#ff6600'];
+
+    for (let i = 0; i < 12; i++) {
+        const p = document.createElementNS(ns, 'circle');
+        const angle = (Math.PI * 2 * i) / 12;
+        const dist = 15 + Math.random() * 20;
+        const dx = Math.cos(angle) * dist;
+        const dy = Math.sin(angle) * dist;
+        p.setAttribute('cx', pos.x);
+        p.setAttribute('cy', pos.y);
+        p.setAttribute('r', 1.5 + Math.random() * 2);
+        p.setAttribute('fill', colors[i % colors.length]);
+        p.setAttribute('opacity', '1');
+        p.innerHTML = `
+            <animate attributeName="cx" to="${pos.x + dx}" dur="0.5s" fill="freeze"/>
+            <animate attributeName="cy" to="${pos.y + dy}" dur="0.5s" fill="freeze"/>
+            <animate attributeName="opacity" to="0" dur="0.5s" fill="freeze"/>
+            <animate attributeName="r" to="0" dur="0.5s" fill="freeze"/>
+        `;
+        svg.appendChild(p);
+        setTimeout(() => p.remove(), 600);
+    }
+}
+
 // ===== TERRITORY NAMES TOGGLE =====
-let namesVisible = false;
+let namesVisible = true;
 function toggleNames() {
     namesVisible = !namesVisible;
     document.querySelectorAll('.territory-name').forEach(el => {
-        el.classList.toggle('visible', namesVisible);
+        el.style.display = namesVisible ? '' : 'none';
     });
-    document.getElementById('btn-names').classList.toggle('open', namesVisible);
+    document.getElementById('btn-names').classList.toggle('open', !namesVisible);
 }
 
 // ===== ZOOM / PAN =====
@@ -793,13 +869,24 @@ function toggleSoundBtn() {
 async function doRapidAttack() {
     if (!selectedTerritory || !targetTerritory) return;
     playDice();
+    const from = selectedTerritory;
     const target = targetTerritory;
     const res = await apiPost(`/api/games/${gameId}/rapid_attack`, {from_territory: selectedTerritory, to_territory: targetTerritory, num_dice: 3});
     if (res) {
         log(`⚡ Attacco rapido: ${res.rounds} round`);
         if (res.results?.length) { const last = res.results[res.results.length-1]; animateDice(last.attacker_dice, last.defender_dice); }
         gameStats.attacks += res.rounds || 0;
-        if (res.state) { gameState = res.state; if (gameState.territories[target]?.owner === gameState.players[gameState.current_player]?.id) { flashConquest(target); gameStats.conquests++; log(`🏴 ${formatName(target)} conquistato!`); } clearSel(); renderAll(); }
+        if (res.state) {
+            gameState = res.state;
+            if (gameState.territories[target]?.owner === gameState.players[gameState.current_player]?.id) {
+                flashConquest(target); gameStats.conquests++; log(`🏴 ${formatName(target)} conquistato!`);
+                const availableTroops = gameState.territories[from].troops - 1;
+                if (availableTroops > 0) {
+                    pendingConquest = {from, to: target, min: 0, max: availableTroops};
+                }
+            }
+            clearSel(); renderAll();
+        }
     }
 }
 
@@ -946,7 +1033,6 @@ function flashLostTerritory(tid) {
 function getNextReinforcements(playerId) {
     const territories = Object.values(gameState.territories).filter(t => t.owner === playerId).length;
     let base = Math.max(3, Math.floor(territories / 3));
-    // Continent bonus
     for (const [cid, terrs] of Object.entries(CONTINENTS_MAP)) {
         if (terrs.every(t => gameState.territories[t]?.owner === playerId)) {
             const bonuses = {north_america:5, south_america:2, europe:5, africa:3, asia:7, oceania:2};
@@ -1024,3 +1110,313 @@ const _finalCreateGame = createGame;
 createGame = async function() { await _finalCreateGame(); showTutorial(); };
 
 document.addEventListener('DOMContentLoaded', updateSetupForm);
+
+// ===== SPEED MODE =====
+let speedMode = false, speedTimer = null, speedSeconds = 0;
+const SPEED_LIMIT = 10;
+
+function startSpeedTimer() {
+    if (!speedMode || !gameState || gameState.phase === 'game_over' || gameState.phase === 'setup') return;
+    const p = gameState.players[gameState.current_player];
+    if (p.is_ai) return;
+    stopSpeedTimer();
+    speedSeconds = SPEED_LIMIT;
+    updateTimerDisplay();
+    document.getElementById('speed-timer').classList.remove('hidden');
+    speedTimer = setInterval(() => {
+        speedSeconds--;
+        updateTimerDisplay();
+        if (speedSeconds <= 0) { stopSpeedTimer(); autoSkipTurn(); }
+    }, 1000);
+}
+
+function stopSpeedTimer() {
+    if (speedTimer) { clearInterval(speedTimer); speedTimer = null; }
+    document.getElementById('speed-timer').classList.add('hidden');
+}
+
+function updateTimerDisplay() {
+    const el = document.getElementById('speed-timer');
+    el.textContent = `⏱️ ${speedSeconds}s`;
+    el.className = speedSeconds <= 3 ? 'speed-critical' : '';
+}
+
+async function autoSkipTurn() {
+    if (!gameState || gameState.phase === 'game_over') return;
+    showToast('⏱️ Tempo scaduto!');
+    if (gameState.phase === 'reinforce') {
+        // Auto-place remaining troops randomly
+        const p = gameState.players[gameState.current_player];
+        while (p.troops_to_place > 0 && gameState.phase === 'reinforce') {
+            const owned = Object.entries(gameState.territories).filter(([_, t]) => t.owner === p.id);
+            if (!owned.length) break;
+            const [tid] = owned[Math.floor(Math.random() * owned.length)];
+            await apiPost(`/api/games/${gameId}/reinforce`, {territory: tid, troops: 1});
+        }
+    } else if (gameState.phase === 'attack') {
+        await apiPost(`/api/games/${gameId}/end_turn`);
+    } else if (gameState.phase === 'fortify') {
+        await apiPost(`/api/games/${gameId}/end_turn`);
+    }
+    clearSel(); checkAiTurn();
+}
+
+// Hook into renderAll to restart timer on phase/player change
+let _lastTimerKey = '';
+const _speedRenderAll = renderAll;
+renderAll = function() {
+    _speedRenderAll();
+    if (!speedMode || !gameState) return;
+    const key = `${gameState.current_player}-${gameState.phase}`;
+    if (key !== _lastTimerKey) { _lastTimerKey = key; startSpeedTimer(); }
+};
+
+// Hook createGame to read speed mode checkbox
+const _origCreateGame2 = createGame;
+createGame = async function() {
+    speedMode = document.getElementById('speed-mode').checked;
+    await _origCreateGame2();
+    if (speedMode) log('⚡ SPEED MODE attivo — 10 secondi per turno!');
+};
+
+// ===== TOURNAMENT MODE =====
+let tournamentId = null, tournamentState = null;
+
+async function createTournament() {
+    const total = parseInt(document.getElementById('total-players').value);
+    const humans = parseInt(document.getElementById('human-players').value);
+    const difficulty = document.getElementById('ai-difficulty').value;
+    const names = [], colors = [], aiFlags = [];
+    for (let i = 0; i < humans; i++) { names.push(document.getElementById(`pname${i}`)?.value?.trim() || `Giocatore ${i+1}`); colors.push(document.getElementById(`color${i}`)?.value || COLORS[i]); aiFlags.push(false); }
+    const used = new Set(colors); let ci = 0;
+    for (let i = 0; i < total - humans; i++) { names.push(`CPU ${i+1}`); while (used.has(COLORS[ci])) ci++; colors.push(COLORS[ci]); used.add(COLORS[ci]); ci++; aiFlags.push(true); }
+
+    const res = await fetch('/api/tournaments?best_of=3', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ player_names: names, player_colors: colors, ai_players: aiFlags, ai_difficulty: difficulty }) });
+    const data = await res.json();
+    tournamentId = data.tournament_id;
+    tournamentState = data.tournament;
+    showToast('🏆 Torneo iniziato! Best of 3');
+    startNextTournamentMatch();
+}
+
+async function startNextTournamentMatch() {
+    const res = await fetch(`/api/tournaments/${tournamentId}/next_match`, { method: 'POST' });
+    const data = await res.json();
+    gameId = data.game_id; gameState = data.state;
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'block';
+    connectWS(); renderAll();
+    log(`🏆 Torneo — Partita ${data.match_number} di ${tournamentState.best_of}`);
+    showTournamentProgress();
+    checkAiTurn();
+}
+
+function showTournamentProgress() {
+    if (!tournamentState) return;
+    const ov = document.getElementById('tournament-overlay');
+    ov.classList.remove('hidden');
+    const scores = tournamentState.players.map(p =>
+        `<span style="color:${p.color};font-weight:bold">${p.name}: ${p.wins}</span>`
+    ).join(' — ');
+    ov.innerHTML = `<div class="tournament-bar">🏆 Partita ${tournamentState.current_match + 1}/${tournamentState.best_of} | ${scores}</div>`;
+    setTimeout(() => ov.classList.add('hidden'), 4000);
+}
+
+async function handleTournamentGameOver() {
+    if (!tournamentId || !tournamentState || gameState.winner === null) return false;
+    const winner = gameState.players[gameState.winner];
+
+    const res = await fetch(`/api/tournaments/${tournamentId}/record_result?winner_name=${encodeURIComponent(winner.name)}&turns=${gameState.turn_number}`, { method: 'POST' });
+    tournamentState = await res.json();
+
+    // Update local wins
+    for (const p of tournamentState.players) {
+        if (p.name === winner.name) { p.wins = p.wins; break; }
+    }
+
+    if (tournamentState.winner) {
+        // Tournament over!
+        showTournamentWinner();
+        return true;
+    }
+
+    // Show match result and start next
+    showTournamentMatchResult(winner.name);
+    return true;
+}
+
+function showTournamentMatchResult(winnerName) {
+    const overlay = document.getElementById('stats-overlay');
+    overlay.classList.remove('hidden');
+    const scores = tournamentState.players.map(p =>
+        `<div class="stats-row"><span class="label" style="color:${p.color}">${p.name}</span><span class="value">${p.wins} vittorie</span></div>`
+    ).join('');
+    overlay.innerHTML = `<div class="stats-box">
+        <h2>🏆 Partita ${tournamentState.current_match}/${tournamentState.best_of}</h2>
+        <p style="color:#f9c74f;font-size:1.1rem">${winnerName} vince questa partita!</p>
+        ${scores}
+        <button onclick="nextTournamentMatch()">⚔️ Prossima Partita</button>
+    </div>`;
+}
+
+function showTournamentWinner() {
+    const overlay = document.getElementById('stats-overlay');
+    overlay.classList.remove('hidden');
+    const scores = tournamentState.players.map(p =>
+        `<div class="stats-row"><span class="label" style="color:${p.color}">${p.name}</span><span class="value">${p.wins} vittorie</span></div>`
+    ).join('');
+    overlay.innerHTML = `<div class="stats-box">
+        <h2>🏆🏆🏆 TORNEO FINITO!</h2>
+        <p style="color:#f9c74f;font-size:1.3rem;font-weight:bold">${tournamentState.winner} è il campione!</p>
+        ${scores}
+        <p style="color:#aaa;font-size:0.8rem;margin-top:12px">Classifica ELO aggiornata</p>
+        <button onclick="endTournament()">🚪 Torna al Menu</button>
+    </div>`;
+    playVictory();
+}
+
+async function nextTournamentMatch() {
+    document.getElementById('stats-overlay').classList.add('hidden');
+    gameStats = {attacks:0,conquests:0,troopsLost:0,troopsKilled:0};
+    territoryHistory = [];
+    await startNextTournamentMatch();
+}
+
+function endTournament() {
+    document.getElementById('stats-overlay').classList.add('hidden');
+    document.getElementById('game-screen').style.display = 'none';
+    document.getElementById('setup-screen').style.display = '';
+    tournamentId = null; tournamentState = null;
+    gameState = null; gameId = null;
+    loadEloRankings();
+}
+
+async function loadEloRankings() {
+    try {
+        const res = await fetch('/api/elo');
+        const data = await res.json();
+        const section = document.getElementById('elo-section');
+        if (!data.rankings || data.rankings.length === 0) { section.innerHTML = ''; return; }
+        section.innerHTML = `<h3>🏅 Classifica ELO</h3><div class="elo-list">${
+            data.rankings.slice(0, 10).map((r, i) =>
+                `<div class="elo-row"><span class="elo-rank">#${i+1}</span><span class="elo-name">${r.name}</span><span class="elo-score">${r.elo}</span></div>`
+            ).join('')
+        }</div>`;
+    } catch(e) { /* ignore */ }
+}
+
+// Override game over to handle tournament
+const _origShowEndGameStats = showEndGameStats;
+showEndGameStats = function() {
+    if (tournamentId) { handleTournamentGameOver(); return; }
+    _origShowEndGameStats();
+};
+
+// Load ELO on page load
+document.addEventListener('DOMContentLoaded', loadEloRankings);
+
+// Achievement tracking hooks
+const _achFlashConquest = flashConquest;
+flashConquest = function(tid) { _achFlashConquest(tid); achievementTracking.conquestsThisTurn++; };
+const _achFlashLost = flashLostTerritory;
+flashLostTerritory = function(tid) { _achFlashLost(tid); achievementTracking.lostTerritory = true; };
+
+// Reset tracking on new game
+const _achCreateGame = createGame;
+createGame = async function() {
+    achievementTracking = { conquestsThisTurn: 0, defensesSuccessful: 0, tradesThisGame: 0, lostTerritory: false };
+    await _achCreateGame();
+};
+
+// ===== ACHIEVEMENTS =====
+const ACHIEVEMENTS = {
+    first_blood: { icon: '🗡️', name: 'Prima Conquista', desc: 'Conquista il tuo primo territorio' },
+    continent_master: { icon: '🌍', name: 'Padrone del Continente', desc: 'Completa un continente intero' },
+    unstoppable: { icon: '🔥', name: 'Inarrestabile', desc: 'Conquista 5 territori in un turno' },
+    fortress: { icon: '🏰', name: 'Fortezza', desc: 'Difendi con successo 10 attacchi in una partita' },
+    blitz: { icon: '⚡', name: 'Blitz', desc: 'Vinci una partita in meno di 15 turni' },
+    survivor: { icon: '🛡️', name: 'Sopravvissuto', desc: 'Vinci senza mai perdere un territorio' },
+    card_master: { icon: '🃏', name: 'Maestro di Carte', desc: 'Scambia 5 tris in una partita' },
+    world_domination: { icon: '👑', name: 'Dominazione Totale', desc: 'Conquista tutti i 42 territori' },
+    speed_demon: { icon: '⏱️', name: 'Speed Demon', desc: 'Vinci in Speed Mode' },
+    tournament_champ: { icon: '🏆', name: 'Campione del Torneo', desc: 'Vinci un torneo' },
+};
+
+let achievementTracking = { conquestsThisTurn: 0, defensesSuccessful: 0, tradesThisGame: 0, lostTerritory: false };
+
+function loadAchievements() { return JSON.parse(localStorage.getItem('risiko_achievements') || '{}'); }
+function saveAchievement(id) {
+    const achs = loadAchievements();
+    if (achs[id]) return; // Already unlocked
+    achs[id] = { date: new Date().toLocaleString('it') };
+    localStorage.setItem('risiko_achievements', JSON.stringify(achs));
+    showAchievementNotification(id);
+}
+
+function showAchievementNotification(id) {
+    const a = ACHIEVEMENTS[id];
+    if (!a) return;
+    const el = document.createElement('div');
+    el.className = 'achievement-popup';
+    el.innerHTML = `<span class="ach-icon">${a.icon}</span><div><b>Achievement Sbloccato!</b><br>${a.name}</div>`;
+    document.body.appendChild(el);
+    setTimeout(() => el.classList.add('show'), 50);
+    setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+function checkAchievements() {
+    if (!gameState) return;
+    const myId = gameState.players[myPlayerIndex].id;
+    const myTerritories = Object.entries(gameState.territories).filter(([_, t]) => t.owner === myId);
+
+    // First conquest
+    if (myTerritories.length > (gameState.players.length > 0 ? Math.floor(Object.keys(gameState.territories).length / gameState.players.length) : 0)) {
+        saveAchievement('first_blood');
+    }
+
+    // Continent master
+    const cmap = CONTINENTS_MAP;
+    for (const [_, terrs] of Object.entries(cmap)) {
+        if (terrs.every(t => gameState.territories[t]?.owner === myId)) {
+            saveAchievement('continent_master');
+            break;
+        }
+    }
+
+    // Unstoppable (5 conquests in one turn)
+    if (achievementTracking.conquestsThisTurn >= 5) saveAchievement('unstoppable');
+
+    // World domination
+    if (myTerritories.length === Object.keys(gameState.territories).length) saveAchievement('world_domination');
+
+    // Card master
+    if (achievementTracking.tradesThisGame >= 5) saveAchievement('card_master');
+}
+
+function checkWinAchievements() {
+    if (!gameState || gameState.winner !== myPlayerIndex) return;
+    if (gameState.turn_number < 15) saveAchievement('blitz');
+    if (!achievementTracking.lostTerritory) saveAchievement('survivor');
+    if (speedMode) saveAchievement('speed_demon');
+    if (tournamentState?.winner === gameState.players[myPlayerIndex].name) saveAchievement('tournament_champ');
+    if (achievementTracking.defensesSuccessful >= 10) saveAchievement('fortress');
+}
+
+// Hook into game events
+const _achRenderAll = renderAll;
+renderAll = function() {
+    _achRenderAll();
+    if (gameState) checkAchievements();
+    if (gameState?.phase === 'game_over' && gameState.winner !== null) checkWinAchievements();
+};
+
+// Track conquests per turn
+let _lastTurnForAch = 0;
+const _achOrigRenderAll2 = renderAll;
+renderAll = function() {
+    _achOrigRenderAll2();
+    if (gameState && gameState.turn_number !== _lastTurnForAch) {
+        _lastTurnForAch = gameState.turn_number;
+        achievementTracking.conquestsThisTurn = 0;
+    }
+};

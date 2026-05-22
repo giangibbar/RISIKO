@@ -2,8 +2,8 @@
 
 ## Gameplay
 - [ ] **Multiplayer rete** — giocare da browser diversi (WebSocket già pronto, serve gestione player ID per sessione)
-- [ ] **AI più smart** — ricorda carte giocate, calcola rischio di essere attaccata, difende continenti
-- [ ] **Modalità torneo** — best of 3, classifica ELO locale
+- [x] **AI più smart** — ricorda carte giocate, calcola rischio di essere attaccata, difende continenti
+- [x] **Modalità torneo** — best of 3, classifica ELO locale
 
 ## Visuale
 - [ ] **Animazioni fluide** — truppe che "camminano" tra territori, dadi 3D con CSS transforms
@@ -16,6 +16,5 @@
 - [ ] **Database partite** — SQLite per storico, classifiche, replay
 
 ## Fun
-- [ ] **Modalità speed** — turni da 10 secondi, chi non agisce perde il turno
-- [ ] **Varianti mappa** — Europa sola, Italia, mappa fantasy
-- [ ] **Achievements** — "Prima conquista", "Continente completo", "Vittoria senza perdere territori"
+- [x] **Modalità speed** — turni da 10 secondi, chi non agisce perde il turno
+- [x] **Achievements** — "Prima conquista", "Continente completo", "Vittoria senza perdere territori"
