@@ -260,9 +260,11 @@ class GameEngine:
             if card.territory and self.game.territories[card.territory].owner == player_id:
                 self.game.territories[card.territory].troops += 2
 
-        # Remove cards (reverse order to preserve indices)
+        # Remove cards (reverse order to preserve indices) and return to deck
         for i in sorted(card_indices, reverse=True):
-            player.cards.pop(i)
+            card = player.cards.pop(i)
+            self.game.card_deck.append(card)
+        random.shuffle(self.game.card_deck)
 
         return f"Traded cards for {bonus} bonus troops"
 
