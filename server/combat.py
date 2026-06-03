@@ -60,9 +60,9 @@ def max_defender_dice(troops_on_territory: int) -> int:
 
 
 def attack_probability(attacker_troops: int, defender_troops: int) -> float:
-    """Estimate probability of attacker winning (Monte Carlo, 500 sims)."""
+    """Estimate probability of attacker winning (Monte Carlo, 100 sims)."""
     wins = 0
-    for _ in range(500):
+    for _ in range(100):
         att, defe = attacker_troops, defender_troops
         while att > 1 and defe > 0:
             ad = min(3, att - 1)
@@ -76,4 +76,4 @@ def attack_probability(attacker_troops: int, defender_troops: int) -> float:
                     att -= 1
         if defe <= 0:
             wins += 1
-    return round(wins / 500 * 100)
+    return round(wins / 100 * 100)

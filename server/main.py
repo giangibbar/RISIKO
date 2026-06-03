@@ -1,10 +1,12 @@
 """Risiko FastAPI server — REST + WebSocket API."""
 
 import json
+import asyncio
 from typing import Dict, List
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from .models import (
     CreateGameRequest, PlaceTroopsRequest, AttackRequest,
@@ -18,6 +20,7 @@ from .tournament import (
 )
 
 app = FastAPI(title="Risiko", version="1.0.0")
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 @app.exception_handler(ValueError)
@@ -212,7 +215,7 @@ async def ai_turn(game_id: str):
     if not player.is_ai:
         raise HTTPException(400, "Current player is not AI")
 
-    logs = ai_play_turn(engine.game, engine, difficulty=player.ai_difficulty)
+    logs = await asyncio.to_thread(ai_play_turn, engine.game, engine, difficulty=player.ai_difficulty)
     await broadcast_state(game_id)
     return {"logs": logs, "state": engine.game.model_dump()}
 
@@ -226,7 +229,7 @@ async def ai_step(game_id: str):
     if not player.is_ai:
         raise HTTPException(400, "Current player is not AI")
 
-    log_entry = ai_play_step(engine.game, engine, difficulty=player.ai_difficulty)
+    log_entry = await asyncio.to_thread(ai_play_step, engine.game, engine, difficulty=player.ai_difficulty)
     await broadcast_state(game_id)
     return {"log": log_entry, "state": engine.game.model_dump(), "done": log_entry is None or log_entry.get("action") in ("end_turn", "end_attack")}
 
@@ -369,12 +372,19 @@ async def websocket_endpoint(websocket: WebSocket, game_id: str):
 
 # --- Static files (client) ---
 
+@app.middleware("http")
+async def static_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "public, max-age=86400"
+    return response
+
 app.mount("/static", StaticFiles(directory="client"), name="static")
 
 
 @app.get("/")
 async def index():
-    return FileResponse("client/index.html")
+    return FileResponse("client/index.html", headers={"Cache-Control": "public, max-age=3600"})
 
 
 # --- Helpers ---
