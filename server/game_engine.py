@@ -330,6 +330,7 @@ class GameEngine:
         # Check if defender eliminated
         if not defender.territories:
             defender.alive = False
+            defender.eliminated_by = player_id
             # Take their cards
             player.cards.extend(defender.cards)
             defender.cards.clear()

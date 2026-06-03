@@ -36,6 +36,7 @@ class Player(BaseModel):
     is_ai: bool = False
     ai_difficulty: str = "medium"  # easy, medium, hard
     objective: str = ""  # Secret objective text
+    eliminated_by: int | None = None  # Player ID who eliminated this player
     territories: List[str] = Field(default_factory=list)
     cards: List[Card] = Field(default_factory=list)
     troops_to_place: int = 0

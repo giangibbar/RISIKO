@@ -67,7 +67,8 @@ OBJECTIVES = [
 
 
 def _check_destroy(player, territories, players, target_color: str) -> bool:
-    """If target is yourself or not in game, fallback to 24 territories."""
+    """If target is yourself or not in game, fallback to 24 territories.
+    If target was eliminated by someone else, also fallback to 24 territories."""
     # Find target player
     target = None
     for p in players:
@@ -79,7 +80,15 @@ def _check_destroy(player, territories, players, target_color: str) -> bool:
         # Target color is yourself or not in game — fallback to 24 territories
         return len(player.territories) >= 24
 
-    return not target.alive
+    if not target.alive:
+        # Check if WE eliminated them (target has no territories and we took them)
+        # If target was eliminated by someone else, fallback to 24 territories
+        eliminated_by = getattr(target, 'eliminated_by', None)
+        if eliminated_by == player.id:
+            return True
+        return len(player.territories) >= 24
+
+    return False
 
 
 def assign_objectives(num_players: int, player_colors: List[str] = None) -> List[str]:

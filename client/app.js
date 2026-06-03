@@ -785,7 +785,7 @@ function showEndGameStats() {
 
     overlay.innerHTML = `<div class="stats-box">
         <h2>🏆 ${winner.name} ha vinto!</h2>
-        <div class="stats-row"><span class="label">Obiettivo completato</span><span class="value" style="font-size:0.85rem">${winner.objective || 'Conquista totale'}</span></div>
+        <div style="background:#f9c74f22;border:1px solid #f9c74f;border-radius:8px;padding:12px;margin:12px 0;text-align:center"><span style="font-size:11px;color:#f9c74f;text-transform:uppercase">Obiettivo completato</span><br><span style="font-size:1.1rem;color:#f9c74f;font-weight:bold">${winner.objective || 'Conquista totale'}</span></div>
         <div class="stats-row"><span class="label">Territori</span><span class="value">${winnerTerritories}/${totalTerritories}</span></div>
         <div class="stats-row"><span class="label">Turni giocati</span><span class="value">${gameState.turn_number}</span></div>
         <div class="stats-row"><span class="label">Attacchi effettuati</span><span class="value">${gameStats.attacks}</span></div>
