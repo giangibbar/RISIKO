@@ -33,6 +33,15 @@ pip install -r requirements.txt
 
 Apri `http://localhost:8080` nel browser.
 
+### Deploy Raspberry Pi 4
+
+Gira come servizio systemd su porta 8081 con ottimizzazioni per ARM64:
+
+- **GZip middleware** — SVG 506KB → ~60KB, JS 73KB → ~20KB
+- **Cache headers** — asset statici cachati 24h
+- **Monte Carlo 100 iterazioni** — probabilità attacco 5× più veloce
+- **AI in asyncio.to_thread** — non blocca WebSocket durante turni CPU
+
 ## 📁 Struttura
 
 ```
