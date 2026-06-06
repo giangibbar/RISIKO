@@ -71,7 +71,7 @@ async function createGame() {
     const used = new Set(colors); let ci = 0;
     for (let i = 0; i < total - humans; i++) { names.push(`CPU ${i+1}`); while (used.has(COLORS[ci])) ci++; colors.push(COLORS[ci]); used.add(COLORS[ci]); ci++; aiFlags.push(true); }
 
-    const res = await fetch('/api/games', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ player_names: names, player_colors: colors, ai_players: aiFlags, ai_difficulty: difficulty }) });
+    const res = await fetch('api/games', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ player_names: names, player_colors: colors, ai_players: aiFlags, ai_difficulty: difficulty }) });
     const data = await res.json();
     gameId = data.game_id; gameState = data.state;
     document.getElementById('setup-screen').style.display = 'none';
@@ -82,7 +82,8 @@ async function createGame() {
 // ===== WEBSOCKET =====
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = new WebSocket(`${proto}//${location.host}/ws/${gameId}`);
+    const basePath = location.pathname.replace(/\/$/, '');
+    ws = new WebSocket(`${proto}//${location.host}${basePath}/ws/${gameId}`);
     ws.onmessage = e => { const m = JSON.parse(e.data); if (m.type === 'state_update') { delete m.type; gameState = m; renderAll(); } };
 }
 
@@ -345,7 +346,7 @@ function toggleCard(idx) {
 
 async function tradeSelectedCards() {
     const indices = [...selectedCards].sort((a,b) => a-b);
-    await apiPost(`/api/games/${gameId}/trade`, { card_indices: indices });
+    await apiPost(`api/games/${gameId}/trade`, { card_indices: indices });
     selectedCards.clear(); renderCardsPanel();
 }
 
@@ -392,14 +393,14 @@ function onTerritoryClick(tid) {
 }
 
 // ===== API =====
-async function placeSetup(t) { await apiPost(`/api/games/${gameId}/setup`, {territory:t, troops:1}); clearSel(); checkAiTurn(); }
-async function placeReinforce(t) { await apiPost(`/api/games/${gameId}/reinforce`, {territory:t, troops:1}); clearSel(); checkAiTurn(); }
+async function placeSetup(t) { await apiPost(`api/games/${gameId}/setup`, {territory:t, troops:1}); clearSel(); checkAiTurn(); }
+async function placeReinforce(t) { await apiPost(`api/games/${gameId}/reinforce`, {territory:t, troops:1}); clearSel(); checkAiTurn(); }
 async function doAttack(dice) {
     if (!selectedTerritory || !targetTerritory) return;
     playDice();
     gameStats.attacks++;
     const from = selectedTerritory, target = targetTerritory;
-    const res = await apiPost(`/api/games/${gameId}/attack`, {from_territory: from, to_territory: target, num_dice: dice});
+    const res = await apiPost(`api/games/${gameId}/attack`, {from_territory: from, to_territory: target, num_dice: dice});
     if (res?.result) {
         animateDice(res.result.attacker_dice, res.result.defender_dice);
         gameStats.troopsLost += res.result.attacker_losses;
@@ -428,13 +429,13 @@ async function confirmConquestMove() {
     if (!pendingConquest) return;
     const troops = parseInt(document.getElementById('conquest-troops')?.value || '0');
     if (troops > 0) {
-        await apiPost(`/api/games/${gameId}/move`, {from_territory: pendingConquest.from, to_territory: pendingConquest.to, troops});
+        await apiPost(`api/games/${gameId}/move`, {from_territory: pendingConquest.from, to_territory: pendingConquest.to, troops});
     }
     pendingConquest = null;
     renderAll();
-}async function endAttack() { await apiPost(`/api/games/${gameId}/end_attack`); clearSel(); checkAiTurn(); }
-async function endTurn() { await apiPost(`/api/games/${gameId}/end_turn`); clearSel(); checkAiTurn(); }
-async function doFortify() { if (!selectedTerritory || !targetTerritory) return; const n = parseInt(document.getElementById('fort-n')?.value||'1'); await apiPost(`/api/games/${gameId}/fortify`, {from_territory:selectedTerritory, to_territory:targetTerritory, troops:n}); clearSel(); checkAiTurn(); }
+}async function endAttack() { await apiPost(`api/games/${gameId}/end_attack`); clearSel(); checkAiTurn(); }
+async function endTurn() { await apiPost(`api/games/${gameId}/end_turn`); clearSel(); checkAiTurn(); }
+async function doFortify() { if (!selectedTerritory || !targetTerritory) return; const n = parseInt(document.getElementById('fort-n')?.value||'1'); await apiPost(`api/games/${gameId}/fortify`, {from_territory:selectedTerritory, to_territory:targetTerritory, troops:n}); clearSel(); checkAiTurn(); }
 
 // ===== AI =====
 let pendingDefense = null; // {from, to, dice} when AI attacks human
@@ -455,12 +456,12 @@ async function checkAiTurn() {
 
         // ATTACK PHASE: check if next attack targets a human
         if (gameState.phase === 'attack') {
-            const declareRes = await fetch(`/api/games/${gameId}/ai_declare_attack`, {method: 'POST'});
+            const declareRes = await fetch(`api/games/${gameId}/ai_declare_attack`, {method: 'POST'});
             const declareData = await declareRes.json();
 
             if (!declareData.attack) {
                 // No more attacks — end attack phase via ai_step
-                const stepRes = await fetch(`/api/games/${gameId}/ai_step`, {method: 'POST'});
+                const stepRes = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST'});
                 const stepData = await stepRes.json();
                 if (stepData.log) logAi(stepData.log, currentPlayer.name);
                 if (stepData.state) { gameState = stepData.state; renderAll(); }
@@ -483,7 +484,7 @@ async function checkAiTurn() {
                 return; // Exit loop — will resume after human rolls
             } else {
                 // Not my territory — resolve immediately with animation
-                const res = await apiPost(`/api/games/${gameId}/resolve_attack`, {from_territory: atk.from, to_territory: atk.to, num_dice: atk.dice});
+                const res = await apiPost(`api/games/${gameId}/resolve_attack`, {from_territory: atk.from, to_territory: atk.to, num_dice: atk.dice});
                 if (res?.result) {
                     animateDice(res.result.attacker_dice, res.result.defender_dice);
                     playDice();
@@ -504,7 +505,7 @@ async function checkAiTurn() {
         } else {
             // Non-attack phases: use ai_step
             try {
-                const res = await fetch(`/api/games/${gameId}/ai_step`, {method: 'POST'});
+                const res = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST'});
                 const d = await res.json();
                 if (!d.log) { done = true; break; }
                 logAi(d.log, currentPlayer.name);
@@ -530,7 +531,7 @@ async function defendRoll() {
     pendingDefense = null;
     aiPlaying = true;
 
-    const res = await apiPost(`/api/games/${gameId}/resolve_attack`, {from_territory: atk.from, to_territory: atk.to, num_dice: atk.dice});
+    const res = await apiPost(`api/games/${gameId}/resolve_attack`, {from_territory: atk.from, to_territory: atk.to, num_dice: atk.dice});
     if (res?.result) {
         animateDice(res.result.attacker_dice, res.result.defender_dice);
         playDice();
@@ -800,7 +801,7 @@ function showEndGameStats() {
 
 async function continueGame() {
     document.getElementById('stats-overlay').classList.add('hidden');
-    const res = await apiPost(`/api/games/${gameId}/continue`);
+    const res = await apiPost(`api/games/${gameId}/continue`);
     if (res?.state) { gameState = res.state; renderAll(); }
 }
 
@@ -840,7 +841,7 @@ function loadGame(event) {
         try {
             const data = JSON.parse(e.target.result);
             // Send to server to restore
-            const res = await fetch('/api/games/load', {
+            const res = await fetch('api/games/load', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify(data.gameState),
             });
@@ -871,7 +872,7 @@ async function doRapidAttack() {
     playDice();
     const from = selectedTerritory;
     const target = targetTerritory;
-    const res = await apiPost(`/api/games/${gameId}/rapid_attack`, {from_territory: selectedTerritory, to_territory: targetTerritory, num_dice: 3});
+    const res = await apiPost(`api/games/${gameId}/rapid_attack`, {from_territory: selectedTerritory, to_territory: targetTerritory, num_dice: 3});
     if (res) {
         log(`⚡ Attacco rapido: ${res.rounds} round`);
         if (res.results?.length) { const last = res.results[res.results.length-1]; animateDice(last.attacker_dice, last.defender_dice); }
@@ -891,12 +892,12 @@ async function doRapidAttack() {
 }
 
 // ===== UNDO REINFORCE =====
-async function undoReinforce() { await apiPost(`/api/games/${gameId}/undo_reinforce`); }
+async function undoReinforce() { await apiPost(`api/games/${gameId}/undo_reinforce`); }
 
 // ===== ATTACK PROBABILITY =====
 async function fetchProbability(from, to) {
     try {
-        const r = await fetch(`/api/games/${gameId}/probability?from_territory=${from}&to_territory=${to}`);
+        const r = await fetch(`api/games/${gameId}/probability?from_territory=${from}&to_territory=${to}`);
         const d = await r.json();
         const el = document.getElementById('prob-display');
         if (el) { const c = d.probability > 60 ? '#4caf50' : d.probability > 35 ? '#ff9800' : '#f44336'; el.innerHTML = `<span style="color:${c};font-weight:bold;margin:0 8px">${d.probability}%</span>`; }
@@ -1151,12 +1152,12 @@ async function autoSkipTurn() {
             const owned = Object.entries(gameState.territories).filter(([_, t]) => t.owner === p.id);
             if (!owned.length) break;
             const [tid] = owned[Math.floor(Math.random() * owned.length)];
-            await apiPost(`/api/games/${gameId}/reinforce`, {territory: tid, troops: 1});
+            await apiPost(`api/games/${gameId}/reinforce`, {territory: tid, troops: 1});
         }
     } else if (gameState.phase === 'attack') {
-        await apiPost(`/api/games/${gameId}/end_turn`);
+        await apiPost(`api/games/${gameId}/end_turn`);
     } else if (gameState.phase === 'fortify') {
-        await apiPost(`/api/games/${gameId}/end_turn`);
+        await apiPost(`api/games/${gameId}/end_turn`);
     }
     clearSel(); checkAiTurn();
 }
@@ -1191,7 +1192,7 @@ async function createTournament() {
     const used = new Set(colors); let ci = 0;
     for (let i = 0; i < total - humans; i++) { names.push(`CPU ${i+1}`); while (used.has(COLORS[ci])) ci++; colors.push(COLORS[ci]); used.add(COLORS[ci]); ci++; aiFlags.push(true); }
 
-    const res = await fetch('/api/tournaments?best_of=3', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ player_names: names, player_colors: colors, ai_players: aiFlags, ai_difficulty: difficulty }) });
+    const res = await fetch('api/tournaments?best_of=3', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ player_names: names, player_colors: colors, ai_players: aiFlags, ai_difficulty: difficulty }) });
     const data = await res.json();
     tournamentId = data.tournament_id;
     tournamentState = data.tournament;
@@ -1200,7 +1201,7 @@ async function createTournament() {
 }
 
 async function startNextTournamentMatch() {
-    const res = await fetch(`/api/tournaments/${tournamentId}/next_match`, { method: 'POST' });
+    const res = await fetch(`api/tournaments/${tournamentId}/next_match`, { method: 'POST' });
     const data = await res.json();
     gameId = data.game_id; gameState = data.state;
     document.getElementById('setup-screen').style.display = 'none';
@@ -1226,7 +1227,7 @@ async function handleTournamentGameOver() {
     if (!tournamentId || !tournamentState || gameState.winner === null) return false;
     const winner = gameState.players[gameState.winner];
 
-    const res = await fetch(`/api/tournaments/${tournamentId}/record_result?winner_name=${encodeURIComponent(winner.name)}&turns=${gameState.turn_number}`, { method: 'POST' });
+    const res = await fetch(`api/tournaments/${tournamentId}/record_result?winner_name=${encodeURIComponent(winner.name)}&turns=${gameState.turn_number}`, { method: 'POST' });
     tournamentState = await res.json();
 
     // Update local wins
@@ -1293,7 +1294,7 @@ function endTournament() {
 
 async function loadEloRankings() {
     try {
-        const res = await fetch('/api/elo');
+        const res = await fetch('api/elo');
         const data = await res.json();
         const section = document.getElementById('elo-section');
         if (!data.rankings || data.rankings.length === 0) { section.innerHTML = ''; return; }
