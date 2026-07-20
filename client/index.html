@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RISIKO</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>">
-    <link rel="stylesheet" href="static/style.css?v=5">
+    <link rel="stylesheet" href="static/style.css?v=7">
 </head>
 <body>
     <!-- SETUP SCREEN -->
@@ -54,6 +54,7 @@
             <h2>🌐 Lobby Online</h2>
             <div id="lobby-code-box"></div>
             <div id="lobby-nick-box"></div>
+            <div id="lobby-color-box"></div>
             <div class="lobby-cols">
                 <div class="lobby-col"><h3 style="margin:10px 0 4px">Impostazioni</h3><div id="lobby-settings"></div></div>
                 <div class="lobby-col"><h3 style="margin:10px 0 4px">Giocatori collegati</h3><div id="lobby-players"></div></div>
@@ -130,9 +131,9 @@
     <!-- Toast -->
     <div id="toast"></div>
 
-    <script src="static/sounds.js?v=5"></script>
-    <script src="static/dice.js?v=5"></script>
-    <script src="static/app.js?v=5"></script>
+    <script src="static/sounds.js?v=7"></script>
+    <script src="static/dice.js?v=7"></script>
+    <script src="static/app.js?v=7"></script>
     <script>
         fetch('static/assets/world.svg')
             .then(r => r.text())

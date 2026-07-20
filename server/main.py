@@ -155,8 +155,8 @@ def _lobby_public(lobby: dict) -> dict:
         "game_id": lobby["game_id"],
         "players": [
             {"nickname": p["nickname"], "ready": p["ready"],
-             "is_host": p["is_host"], "color": PALETTE[i % len(PALETTE)]}
-            for i, p in enumerate(lobby["players"])
+             "is_host": p["is_host"], "color": p["color"]}
+            for p in lobby["players"]
         ],
     }
 
@@ -187,12 +187,14 @@ async def create_lobby(req: dict):
         "settings": {
             "cpu_count": max(0, min(5, int(req.get("cpu_count", 1)))),
             "difficulty": req.get("difficulty", "medium"),
+            "turn_timeout": max(0, min(300, int(req.get("turn_timeout", 0)))),
         },
         "players": [{
             "token": token,
             "nickname": (req.get("nickname") or "Host")[:20],
             "ready": True,
             "is_host": True,
+            "color": PALETTE[0],
         }],
         "started": False,
         "game_id": None,
@@ -212,11 +214,14 @@ async def join_lobby(lobby_id: str, req: dict):
         raise HTTPException(409, "Lobby piena (max 6 giocatori)")
     token = secrets.token_urlsafe(16)
     idx = len(lobby["players"])
+    used = {p["color"] for p in lobby["players"]}
+    free_color = next((c for c in PALETTE if c not in used), PALETTE[idx % len(PALETTE)])
     lobby["players"].append({
         "token": token,
         "nickname": (req.get("nickname") or f"Giocatore {idx + 1}")[:20],
         "ready": False,
         "is_host": False,
+        "color": free_color,
     })
     await broadcast_lobby(lobby_id)
     return {"token": token, "player_index": idx, "lobby": _lobby_public(lobby)}
@@ -232,6 +237,8 @@ async def update_lobby_settings(lobby_id: str, req: dict, x_player_token: Option
         lobby["settings"]["cpu_count"] = max(0, min(5, int(req["cpu_count"])))
     if "difficulty" in req and req["difficulty"] in ("easy", "medium", "hard"):
         lobby["settings"]["difficulty"] = req["difficulty"]
+    if "turn_timeout" in req:
+        lobby["settings"]["turn_timeout"] = max(0, min(300, int(req["turn_timeout"])))
     await broadcast_lobby(lobby_id)
     return _lobby_public(lobby)
 
@@ -266,6 +273,26 @@ async def lobby_nickname(lobby_id: str, req: dict, x_player_token: Optional[str]
     return _lobby_public(lobby)
 
 
+@app.post("/api/lobbies/{lobby_id}/color")
+async def lobby_color(lobby_id: str, req: dict, x_player_token: Optional[str] = Header(default=None)):
+    """Pick an army colour (must be unique among lobby players)."""
+    lobby = _get_lobby(lobby_id)
+    color = req.get("color")
+    if color not in PALETTE:
+        raise HTTPException(400, "Colore non valido")
+    for p in lobby["players"]:
+        if p["color"] == color and p["token"] != x_player_token:
+            raise HTTPException(409, "Colore già scelto da un altro giocatore")
+    for p in lobby["players"]:
+        if p["token"] == x_player_token:
+            p["color"] = color
+            break
+    else:
+        raise HTTPException(403, "Non sei in questa lobby")
+    await broadcast_lobby(lobby_id)
+    return _lobby_public(lobby)
+
+
 @app.post("/api/lobbies/{lobby_id}/start")
 async def start_lobby(lobby_id: str, x_player_token: Optional[str] = Header(default=None)):
     """Host-only: create the game from the lobby roster and notify everyone."""
@@ -283,11 +310,13 @@ async def start_lobby(lobby_id: str, x_player_token: Optional[str] = Header(defa
         raise HTTPException(400, "Servono 2-6 giocatori totali (umani + CPU)")
 
     names, colors, ai_flags = [], [], []
-    ci = 0
+    used = set()
     for p in humans:
-        names.append(p["nickname"]); colors.append(PALETTE[ci]); ai_flags.append(False); ci += 1
+        names.append(p["nickname"]); colors.append(p["color"]); ai_flags.append(False); used.add(p["color"])
+    avail = [c for c in PALETTE if c not in used]
     for k in range(cpu):
-        names.append(f"CPU {k + 1}"); colors.append(PALETTE[ci]); ai_flags.append(True); ci += 1
+        col = avail[k] if k < len(avail) else PALETTE[(len(humans) + k) % len(PALETTE)]
+        names.append(f"CPU {k + 1}"); colors.append(col); ai_flags.append(True)
 
     engine = GameEngine.create_game(names, colors, ai_flags, lobby["settings"]["difficulty"])
     gid = engine.game.id
@@ -511,6 +540,80 @@ async def resolve_attack(game_id: str, req: AttackRequest, _turn: None = Depends
     result = engine.attack(player_id, req.from_territory, req.to_territory, req.num_dice)
     await broadcast_state(game_id)
     return {"result": result.model_dump(), "state": engine.game.model_dump()}
+
+
+def _auto_finish_turn(engine: GameEngine):
+    """Complete the current player's turn automatically (used on AFK timeout):
+    place any remaining reinforcements on random owned territories, then end
+    the turn. Handles setup, forced card trade, reinforce and attack/fortify."""
+    import random
+    from itertools import combinations
+    game = engine.game
+    idx = game.current_player
+    pid = game.players[idx].id
+
+    def owned():
+        return [t for t, v in game.territories.items() if v.owner == pid]
+
+    if game.phase == GamePhase.SETUP:
+        guard = 0
+        while (game.phase == GamePhase.SETUP and game.current_player == idx
+               and game.setup_troops_remaining.get(pid, 0) > 0 and guard < 500):
+            terr = owned()
+            if not terr:
+                break
+            engine.place_setup_troops(pid, random.choice(terr), 1)
+            guard += 1
+        return
+
+    if game.phase == GamePhase.REINFORCE:
+        player = game.players[idx]
+        # Forced trade if holding 5+ cards: try any valid 3-card set.
+        guard = 0
+        while len(player.cards) >= 5 and guard < 30:
+            traded = False
+            for combo in combinations(range(len(player.cards)), 3):
+                try:
+                    engine.trade_cards(pid, list(combo))
+                    traded = True
+                    break
+                except Exception:
+                    continue
+            if not traded:
+                break
+            guard += 1
+        # Place all remaining troops (auto-advances to ATTACK at 0).
+        guard = 0
+        while game.phase == GamePhase.REINFORCE and player.troops_to_place > 0 and guard < 500:
+            terr = owned()
+            if not terr:
+                break
+            engine.place_troops(pid, random.choice(terr), 1)
+            guard += 1
+
+    if game.phase in (GamePhase.ATTACK, GamePhase.FORTIFY) and game.current_player == idx:
+        try:
+            engine.end_turn(pid)
+        except Exception:
+            pass
+
+
+@app.post("/api/games/{game_id}/force_skip")
+async def force_skip(game_id: str, x_player_token: Optional[str] = Header(default=None)):
+    """Host-triggered AFK skip: auto-complete the current human player's turn."""
+    engine = _get_engine(game_id)
+    seats = game_seats.get(game_id) or {}
+    host_token = seats.get(0)
+    if host_token is not None and x_player_token != host_token:
+        raise HTTPException(403, "Solo l'host può forzare il salto turno")
+    game = engine.game
+    if game.phase == GamePhase.GAME_OVER:
+        return {"skipped": False}
+    if game.players[game.current_player].is_ai:
+        return {"skipped": False}
+    _auto_finish_turn(engine)
+    await broadcast_state(game_id)
+    return {"skipped": True, "state": game.model_dump()}
 
 
 @app.post("/api/games/load")

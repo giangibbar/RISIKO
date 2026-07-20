@@ -123,6 +123,11 @@ async function changeNickname(v) {
     await fetch(`api/lobbies/${lobbyId}/nickname`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Player-Token': lobbyToken}, body: JSON.stringify({nickname: v})});
 }
 
+async function setLobbyColor(c) {
+    const r = await fetch(`api/lobbies/${lobbyId}/color`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Player-Token': lobbyToken}, body: JSON.stringify({color: c})});
+    if (!r.ok) { let d; try { d = await r.json(); } catch(_) { d = {}; } showToast(d.detail || 'Colore non disponibile'); }
+}
+
 function connectLobbyWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const basePath = location.pathname.replace(/\/$/, '');
@@ -147,6 +152,16 @@ function renderLobby() {
             <button onclick="copyJoinLink('${link}')" style="padding:4px 10px">📋 Copia link</button>
         </div>`;
 
+    const me = lobbyState.players[myLobbyIndex];
+    const takenByOthers = new Set(lobbyState.players.filter((_, i) => i !== myLobbyIndex).map(p => p.color));
+    document.getElementById('lobby-color-box').innerHTML =
+        `<label class="setup-label">Il tuo colore</label><div class="color-dots">` +
+        COLORS.map(c => {
+            const taken = takenByOthers.has(c);
+            const sel = me && me.color === c;
+            return `<span class="color-dot ${sel ? 'selected' : ''}" style="background:${c};${taken ? 'opacity:.22;cursor:not-allowed' : 'cursor:pointer'}" ${taken ? '' : `onclick="setLobbyColor('${c}')"`} title="${taken ? 'Già scelto' : ''}"></span>`;
+        }).join('') + `</div>`;
+
     const set = document.getElementById('lobby-settings');
     if (lobbyIsHost) {
         let cpuOpts = '';
@@ -161,10 +176,19 @@ function renderLobby() {
                 <option value="medium" ${s.difficulty === 'medium' ? 'selected' : ''}>🟡 Medio</option>
                 <option value="hard" ${s.difficulty === 'hard' ? 'selected' : ''}>🔴 Difficile</option>
              </select>
+             <label class="setup-label">Tempo per turno (salta AFK)</label>
+             <select onchange="updateLobbySettings({turn_timeout: parseInt(this.value)})">
+                <option value="0" ${(s.turn_timeout || 0) === 0 ? 'selected' : ''}>Nessuno</option>
+                <option value="30" ${s.turn_timeout === 30 ? 'selected' : ''}>30 secondi</option>
+                <option value="45" ${s.turn_timeout === 45 ? 'selected' : ''}>45 secondi</option>
+                <option value="60" ${s.turn_timeout === 60 ? 'selected' : ''}>60 secondi</option>
+                <option value="90" ${s.turn_timeout === 90 ? 'selected' : ''}>90 secondi</option>
+             </select>
              <p style="font-size:.75rem;color:var(--text-dim);margin-top:6px">Totale: <b>${total}</b> giocatori (${totalHumans} umani + ${s.cpu_count} CPU)</p>`;
     } else {
         set.innerHTML =
             `<p style="margin:6px 0">CPU avversarie: <b>${s.cpu_count}</b> — Difficoltà: <b>${{easy:'🟢 Facile',medium:'🟡 Medio',hard:'🔴 Difficile'}[s.difficulty] || s.difficulty}</b></p>
+             <p style="margin:6px 0">Tempo per turno: <b>${s.turn_timeout ? s.turn_timeout + 's' : 'nessuno'}</b></p>
              <p style="font-size:.75rem;color:var(--text-dim)">Totale: ${total} giocatori (${totalHumans} umani + ${s.cpu_count} CPU)</p>`;
     }
 
@@ -175,7 +199,6 @@ function renderLobby() {
             <span style="font-size:.85rem">${p.ready ? '✅ Pronto' : '⏳ In attesa'}</span>
         </div>`).join('');
 
-    const me = lobbyState.players[myLobbyIndex];
     const allReady = lobbyState.players.every(p => p.ready);
     const totalOk = total >= 2 && total <= 6;
     const act = document.getElementById('lobby-actions');
@@ -212,6 +235,7 @@ function leaveLobby() {
 async function startFromLobby(gid) {
     gameId = gid;
     networkMode = true; isHost = lobbyIsHost; myPlayerIndex = myLobbyIndex; myToken = lobbyToken;
+    netTurnTimeout = (lobbyState && lobbyState.settings && lobbyState.settings.turn_timeout) || 0;
     try { lobbyWs?.close(); } catch(_) {}
     lobbyWs = null;
     const r = await fetch(`api/games/${gid}`);
@@ -227,6 +251,59 @@ async function startFromLobby(gid) {
 function copyJoinLink(link) {
     if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => showToast('📋 Link copiato!'), () => showToast(link));
     else showToast(link);
+}
+
+// ===== NETWORK TURN TIMEOUT (AFK auto-skip) =====
+let netTurnTimeout = 0;          // seconds per turn, 0 = disabled
+let netTimer = null, netSeconds = 0, _netSig = '';
+
+function netSignature() {
+    if (!gameState) return '';
+    const p = gameState.players[gameState.current_player];
+    const total = Object.values(gameState.territories).filter(t => t.owner === p.id).reduce((s, t) => s + t.troops, 0);
+    return `${gameState.current_player}|${gameState.phase}|${p.troops_to_place}|${total}`;
+}
+
+function stopNetTimer() {
+    if (netTimer) { clearInterval(netTimer); netTimer = null; }
+    const el = document.getElementById('net-timer');
+    if (el) el.style.display = 'none';
+}
+
+function startNetTimer() {
+    stopNetTimer();
+    if (!networkMode || !netTurnTimeout || !gameState) return;
+    if (gameState.phase === 'game_over') return;
+    if (gameState.players[gameState.current_player].is_ai) return; // AI driven separately
+    netSeconds = netTurnTimeout;
+    updateNetTimerDisplay();
+    netTimer = setInterval(() => {
+        netSeconds--;
+        updateNetTimerDisplay();
+        if (netSeconds <= 0) {
+            stopNetTimer();
+            if (isHost) forceSkipTurn();   // only the host has authority to skip
+        }
+    }, 1000);
+}
+
+function updateNetTimerDisplay() {
+    let el = document.getElementById('net-timer');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'net-timer';
+        el.style.cssText = 'position:absolute;top:8px;left:50%;transform:translateX(-50%);z-index:60;background:rgba(10,15,25,0.92);border:1px solid #2563eb;border-radius:8px;padding:4px 12px;font-weight:bold;color:#cdd6f4;backdrop-filter:blur(6px)';
+        document.getElementById('game-screen').appendChild(el);
+    }
+    const p = gameState.players[gameState.current_player];
+    el.style.display = 'block';
+    el.style.borderColor = netSeconds <= 5 ? '#e63946' : '#2563eb';
+    el.textContent = `⏱️ ${p.name}: ${netSeconds}s`;
+}
+
+async function forceSkipTurn() {
+    try { await fetch(`api/games/${gameId}/force_skip`, {method: 'POST', headers: netHeaders()}); } catch(_) {}
+    // The resulting state broadcast restarts the timer for the next player.
 }
 
 // Prefill join code from ?join= URL param
@@ -995,6 +1072,7 @@ function exitGame() {
     document.getElementById('setup-screen').style.display = '';
     gameState = null; gameId = null;
     networkMode = false; isHost = false; myToken = null; myPlayerIndex = 0;
+    netTurnTimeout = 0; _netSig = ''; stopNetTimer();
     document.getElementById('share-box')?.remove();
 }
 
@@ -1006,6 +1084,7 @@ function confirmExit() {
     gameState = null; gameId = null; pendingDefense = null; pendingConquest = null;
     territoryHistory = []; gameStats = {attacks:0,conquests:0,troopsLost:0,troopsKilled:0};
     networkMode = false; isHost = false; myToken = null; myPlayerIndex = 0;
+    netTurnTimeout = 0; _netSig = ''; stopNetTimer();
     document.getElementById('share-box')?.remove();
 }
 
@@ -1608,4 +1687,14 @@ renderAll = function() {
         _lastTurnForAch = gameState.turn_number;
         achievementTracking.conquestsThisTurn = 0;
     }
+};
+
+
+// ===== NETWORK TURN TIMER HOOK =====
+const _netRenderAll = renderAll;
+renderAll = function() {
+    _netRenderAll();
+    if (!networkMode || !netTurnTimeout || !gameState) return;
+    const sig = netSignature();
+    if (sig !== _netSig) { _netSig = sig; startNetTimer(); }
 };
