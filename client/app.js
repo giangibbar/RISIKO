@@ -26,6 +26,10 @@ const CARD_ICON = { infantry: '🚶', cavalry: '🐴', artillery: '💣', wild: 
 let gameId = null, gameState = null, ws = null;
 let selectedTerritory = null, targetTerritory = null;
 let aiPlaying = false, myPlayerIndex = 0;
+// Network multiplayer state
+let networkMode = false, isHost = false, myToken = null;
+function isMyTurn() { return !networkMode || (gameState && gameState.current_player === myPlayerIndex); }
+function netHeaders(base) { base = base || {}; if (networkMode && myToken) base['X-Player-Token'] = myToken; return base; }
 let labelPositions = {}; // territory -> {x, y} in SVG viewport coords
 let openPanel = null;
 let selectedCards = new Set();
@@ -33,15 +37,9 @@ let pendingConquest = null; // {from, to, minTroops, maxTroops} after conquering
 
 // ===== SETUP =====
 function updateSetupForm() {
-    const total = parseInt(document.getElementById('total-players').value);
-    const sel = document.getElementById('human-players');
-    const cur = parseInt(sel.value) || 1;
-    sel.innerHTML = '';
-    for (let i = 1; i <= total; i++) { const o = document.createElement('option'); o.value = i; o.textContent = i; if (i === Math.min(cur, total)) o.selected = true; sel.appendChild(o); }
     const container = document.getElementById('player-names-container');
-    const humans = parseInt(sel.value);
     container.innerHTML = '';
-
+    const humans = 1;
     for (let i = 0; i < humans; i++) {
         const colorOptions = COLORS.map((c, ci) =>
             `<span class="color-dot ${ci === i ? 'selected' : ''}" style="background:${c}" data-player="${i}" data-color="${c}" onclick="selectColor(${i},'${c}',this)"></span>`
@@ -64,7 +62,7 @@ function selectColor(playerIdx, color, el) {
 
 async function createGame() {
     const total = parseInt(document.getElementById('total-players').value);
-    const humans = parseInt(document.getElementById('human-players').value);
+    const humans = 1;
     const difficulty = document.getElementById('ai-difficulty').value;
     const names = [], colors = [], aiFlags = [];
     for (let i = 0; i < humans; i++) { names.push(document.getElementById(`pname${i}`)?.value?.trim() || `Giocatore ${i+1}`); colors.push(document.getElementById(`color${i}`)?.value || COLORS[i]); aiFlags.push(false); }
@@ -79,12 +77,170 @@ async function createGame() {
     connectWS(); renderAll(); log('🎲 Partita iniziata!'); checkAiTurn();
 }
 
+// ===== ONLINE MULTIPLAYER (LOBBY) =====
+let lobbyId = null, lobbyToken = null, lobbyIsHost = false, myLobbyIndex = 0, lobbyWs = null, lobbyState = null;
+
+async function createGameOnline() {
+    const diff = document.getElementById('ai-difficulty')?.value || 'medium';
+    const r = await fetch('api/lobbies', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({nickname: 'Host', cpu_count: 1, difficulty: diff})});
+    let d; try { d = await r.json(); } catch(_) { d = {}; }
+    if (!r.ok) { showToast(d.detail || 'Errore creazione lobby'); return; }
+    lobbyId = d.lobby_id; lobbyToken = d.token; lobbyIsHost = true; myLobbyIndex = d.player_index;
+    enterLobby(d.lobby);
+}
+
+async function joinGame(code) {
+    code = (code || document.getElementById('join-code')?.value || '').trim();
+    if (!code) { showToast('Inserisci il codice partita'); return; }
+    const r = await fetch(`api/lobbies/${code}/join`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({nickname: ''})});
+    let d; try { d = await r.json(); } catch(_) { d = {}; }
+    if (!r.ok) { showToast(d.detail || 'Impossibile unirsi (codice errato o lobby piena)'); return; }
+    lobbyId = code; lobbyToken = d.token; lobbyIsHost = false; myLobbyIndex = d.player_index;
+    enterLobby(d.lobby);
+}
+
+function enterLobby(lob) {
+    lobbyState = lob;
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('lobby-screen').style.display = 'flex';
+    document.getElementById('game-screen').style.display = 'none';
+    renderNickBox();
+    connectLobbyWS();
+    renderLobby();
+}
+
+function renderNickBox() {
+    const me = lobbyState.players[myLobbyIndex];
+    const nick = (me?.nickname || '').replace(/"/g, '&quot;');
+    document.getElementById('lobby-nick-box').innerHTML =
+        `<label class="setup-label">Il tuo nickname</label>
+         <input type="text" id="lobby-nick-input" maxlength="20" value="${nick}" placeholder="Scrivi il tuo nome" onchange="changeNickname(this.value)">`;
+}
+
+async function changeNickname(v) {
+    v = (v || '').trim();
+    if (!v) return;
+    await fetch(`api/lobbies/${lobbyId}/nickname`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Player-Token': lobbyToken}, body: JSON.stringify({nickname: v})});
+}
+
+function connectLobbyWS() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const basePath = location.pathname.replace(/\/$/, '');
+    lobbyWs = new WebSocket(`${proto}//${location.host}${basePath}/ws/lobby/${lobbyId}`);
+    lobbyWs.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.type === 'lobby_update') { lobbyState = m.lobby; renderLobby(); }
+        else if (m.type === 'game_started') { startFromLobby(m.game_id); }
+    };
+}
+
+function renderLobby() {
+    if (!lobbyState) return;
+    const link = `${location.origin}${location.pathname}?join=${lobbyId}`;
+    const s = lobbyState.settings;
+    const totalHumans = lobbyState.players.length;
+    const total = totalHumans + s.cpu_count;
+
+    document.getElementById('lobby-code-box').innerHTML =
+        `<div style="display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:12px">
+            <span>Codice: <b style="color:#5b9bff;font-size:1.1rem">${lobbyId}</b></span>
+            <button onclick="copyJoinLink('${link}')" style="padding:4px 10px">📋 Copia link</button>
+        </div>`;
+
+    const set = document.getElementById('lobby-settings');
+    if (lobbyIsHost) {
+        let cpuOpts = '';
+        const maxCpu = Math.max(0, 6 - totalHumans);
+        for (let c = 0; c <= maxCpu; c++) cpuOpts += `<option value="${c}" ${c === s.cpu_count ? 'selected' : ''}>${c}</option>`;
+        set.innerHTML =
+            `<label class="setup-label">CPU avversarie</label>
+             <select onchange="updateLobbySettings({cpu_count: parseInt(this.value)})">${cpuOpts}</select>
+             <label class="setup-label">Difficoltà CPU</label>
+             <select onchange="updateLobbySettings({difficulty: this.value})">
+                <option value="easy" ${s.difficulty === 'easy' ? 'selected' : ''}>🟢 Facile</option>
+                <option value="medium" ${s.difficulty === 'medium' ? 'selected' : ''}>🟡 Medio</option>
+                <option value="hard" ${s.difficulty === 'hard' ? 'selected' : ''}>🔴 Difficile</option>
+             </select>
+             <p style="font-size:.75rem;color:var(--text-dim);margin-top:6px">Totale: <b>${total}</b> giocatori (${totalHumans} umani + ${s.cpu_count} CPU)</p>`;
+    } else {
+        set.innerHTML =
+            `<p style="margin:6px 0">CPU avversarie: <b>${s.cpu_count}</b> — Difficoltà: <b>${{easy:'🟢 Facile',medium:'🟡 Medio',hard:'🔴 Difficile'}[s.difficulty] || s.difficulty}</b></p>
+             <p style="font-size:.75rem;color:var(--text-dim)">Totale: ${total} giocatori (${totalHumans} umani + ${s.cpu_count} CPU)</p>`;
+    }
+
+    document.getElementById('lobby-players').innerHTML = lobbyState.players.map((p, i) =>
+        `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:6px;background:rgba(255,255,255,.05);margin:4px 0;${i === myLobbyIndex ? 'outline:1px solid #2563eb' : ''}">
+            <span style="background:${p.color};width:14px;height:14px;border-radius:50%;display:inline-block;flex-shrink:0"></span>
+            <b style="flex:1;text-align:left">${p.nickname}${p.is_host ? ' 👑' : ''}${i === myLobbyIndex ? ' <span style="color:#5b9bff;font-size:.7rem">(tu)</span>' : ''}</b>
+            <span style="font-size:.85rem">${p.ready ? '✅ Pronto' : '⏳ In attesa'}</span>
+        </div>`).join('');
+
+    const me = lobbyState.players[myLobbyIndex];
+    const allReady = lobbyState.players.every(p => p.ready);
+    const totalOk = total >= 2 && total <= 6;
+    const act = document.getElementById('lobby-actions');
+    let html = `<button onclick="toggleReady()" style="width:100%;margin-bottom:6px;background:${me && me.ready ? '#2a9d8f' : '#2563eb'}">${me && me.ready ? '✅ Pronto (annulla)' : 'Sono Pronto'}</button>`;
+    if (lobbyIsHost) {
+        html += `<button onclick="startLobby()" ${allReady && totalOk ? '' : 'disabled'} style="width:100%;background:${allReady && totalOk ? '#e63946' : '#555'};cursor:${allReady && totalOk ? 'pointer' : 'not-allowed'}">🚀 Avvia Partita</button>`;
+        if (!allReady) html += `<p style="font-size:.72rem;color:#f39c12;margin-top:6px">Attendi che tutti siano pronti</p>`;
+        else if (!totalOk) html += `<p style="font-size:.72rem;color:#f39c12;margin-top:6px">Servono 2-6 giocatori totali</p>`;
+    } else {
+        html += `<p style="font-size:.72rem;color:var(--text-dim);margin-top:6px">In attesa che l'host avvii la partita…</p>`;
+    }
+    html += `<button onclick="leaveLobby()" style="width:100%;margin-top:8px;background:#333;color:#aaa">← Esci dalla lobby</button>`;
+    act.innerHTML = html;
+}
+
+async function updateLobbySettings(patch) {
+    await fetch(`api/lobbies/${lobbyId}/settings`, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Player-Token': lobbyToken}, body: JSON.stringify(patch)});
+}
+async function toggleReady() {
+    await fetch(`api/lobbies/${lobbyId}/ready`, {method: 'POST', headers: {'X-Player-Token': lobbyToken}});
+}
+async function startLobby() {
+    const r = await fetch(`api/lobbies/${lobbyId}/start`, {method: 'POST', headers: {'X-Player-Token': lobbyToken}});
+    if (!r.ok) { let d; try { d = await r.json(); } catch(_) { d = {}; } showToast(d.detail || 'Impossibile avviare'); }
+    // On success everyone (host included) receives 'game_started' via the lobby WS.
+}
+function leaveLobby() {
+    try { lobbyWs?.close(); } catch(_) {}
+    lobbyWs = null; lobbyId = null; lobbyToken = null; lobbyState = null; lobbyIsHost = false; myLobbyIndex = 0;
+    document.getElementById('lobby-screen').style.display = 'none';
+    document.getElementById('setup-screen').style.display = '';
+}
+
+async function startFromLobby(gid) {
+    gameId = gid;
+    networkMode = true; isHost = lobbyIsHost; myPlayerIndex = myLobbyIndex; myToken = lobbyToken;
+    try { lobbyWs?.close(); } catch(_) {}
+    lobbyWs = null;
+    const r = await fetch(`api/games/${gid}`);
+    gameState = await r.json();
+    document.getElementById('lobby-screen').style.display = 'none';
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'block';
+    connectWS(); renderAll();
+    if (isHost) checkAiTurn();
+    log(`🎮 Partita iniziata! Sei <b style="color:${gameState.players[myPlayerIndex].color}">${gameState.players[myPlayerIndex].name}</b>`);
+}
+
+function copyJoinLink(link) {
+    if (navigator.clipboard) navigator.clipboard.writeText(link).then(() => showToast('📋 Link copiato!'), () => showToast(link));
+    else showToast(link);
+}
+
+// Prefill join code from ?join= URL param
+document.addEventListener('DOMContentLoaded', () => {
+    const j = new URLSearchParams(location.search).get('join');
+    if (j) { const inp = document.getElementById('join-code'); if (inp) inp.value = j; showToast('Codice partita rilevato — premi "Unisciti con Codice"'); }
+});
+
 // ===== WEBSOCKET =====
 function connectWS() {
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const basePath = location.pathname.replace(/\/$/, '');
     ws = new WebSocket(`${proto}//${location.host}${basePath}/ws/${gameId}`);
-    ws.onmessage = e => { const m = JSON.parse(e.data); if (m.type === 'state_update') { delete m.type; gameState = m; renderAll(); } };
+    ws.onmessage = e => { const m = JSON.parse(e.data); if (m.type === 'state_update') { delete m.type; gameState = m; renderAll(); if (networkMode && isHost) checkAiTurn(); } };
 }
 
 // ===== RENDER =====
@@ -151,7 +307,27 @@ function renderAttackLines() {
     }
 
     // Show attackable lines when player selects a territory
-    if (!selectedTerritory || gameState.phase !== 'attack') return;
+    if (!selectedTerritory || gameState.phase !== 'attack') {
+        // Fortify: blue dashed lines from source to reachable owned neighbors
+        if (selectedTerritory && gameState.phase === 'fortify') {
+            const st = gameState.territories[selectedTerritory];
+            const player = gameState.players[gameState.current_player];
+            if (st.owner !== player.id || st.troops < 2) return;
+            const from = labelPositions[selectedTerritory];
+            if (!from) return;
+            for (const n of getNeighbors(selectedTerritory)) {
+                if (gameState.territories[n].owner !== player.id) continue;
+                const to = labelPositions[n];
+                if (!to) continue;
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', from.x); line.setAttribute('y1', from.y);
+                line.setAttribute('x2', to.x); line.setAttribute('y2', to.y);
+                line.classList.add('fortify-line');
+                svg.appendChild(line);
+            }
+        }
+        return;
+    }
     const st = gameState.territories[selectedTerritory];
     const player = gameState.players[gameState.current_player];
     if (st.owner !== player.id || st.troops < 2) return;
@@ -205,6 +381,12 @@ function renderActionBar() {
     const bar = document.getElementById('action-bar');
     const phase = gameState.phase;
     const p = gameState.players[gameState.current_player];
+
+    // Network multiplayer: not your turn → show waiting state, no controls
+    if (networkMode && !isMyTurn()) {
+        bar.innerHTML = `<span class="info">⏳ Turno di <b style="color:${p.color}">${p.name}</b>${p.is_ai ? ' 🤖' : ''} — attendi il tuo turno…</span>`;
+        return;
+    }
 
     // Show defend button when AI attacks your territory
     if (pendingDefense) {
@@ -353,6 +535,7 @@ async function tradeSelectedCards() {
 // ===== MAP INTERACTION =====
 function onTerritoryClick(tid) {
     if (!gameState || aiPlaying) return;
+    if (networkMode && !isMyTurn()) { showToast('⏳ Attendi il tuo turno'); return; }
     handleDoubleClick(tid);
     const p = gameState.players[gameState.current_player];
     if (p.is_ai) return;
@@ -442,6 +625,7 @@ let pendingDefense = null; // {from, to, dice} when AI attacks human
 
 async function checkAiTurn() {
     if (!gameState || aiPlaying || gameState.phase === 'game_over') return;
+    if (networkMode && !isHost) return; // only the host drives AI turns
     const p = gameState.players[gameState.current_player];
     if (!p.is_ai) return;
 
@@ -456,12 +640,12 @@ async function checkAiTurn() {
 
         // ATTACK PHASE: check if next attack targets a human
         if (gameState.phase === 'attack') {
-            const declareRes = await fetch(`api/games/${gameId}/ai_declare_attack`, {method: 'POST'});
+            const declareRes = await fetch(`api/games/${gameId}/ai_declare_attack`, {method: 'POST', headers: netHeaders()});
             const declareData = await declareRes.json();
 
             if (!declareData.attack) {
                 // No more attacks — end attack phase via ai_step
-                const stepRes = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST'});
+                const stepRes = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST', headers: netHeaders()});
                 const stepData = await stepRes.json();
                 if (stepData.log) logAi(stepData.log, currentPlayer.name);
                 if (stepData.state) { gameState = stepData.state; renderAll(); }
@@ -474,7 +658,7 @@ async function checkAiTurn() {
             const targetOwner = gameState.territories[atk.to]?.owner;
             const isMyTerritory = targetOwner === gameState.players[myPlayerIndex].id;
 
-            if (isMyTerritory) {
+            if (isMyTerritory && !networkMode) {
                 // PAUSE: show "Defend!" button and wait for human to click
                 pendingDefense = atk;
                 aiPlaying = false;
@@ -505,7 +689,7 @@ async function checkAiTurn() {
         } else {
             // Non-attack phases: use ai_step
             try {
-                const res = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST'});
+                const res = await fetch(`api/games/${gameId}/ai_step`, {method: 'POST', headers: netHeaders()});
                 const d = await res.json();
                 if (!d.log) { done = true; break; }
                 logAi(d.log, currentPlayer.name);
@@ -555,7 +739,7 @@ async function defendRoll() {
 // logAi defined at bottom with trash talk support
 
 // ===== HELPERS =====
-async function apiPost(url, body) { try { const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)}); const d = await r.json(); if (!r.ok) { showToast(d.detail||'Errore'); return null; } if (d.message) log(d.message); return d; } catch(e) { showToast(e.message); return null; } }
+async function apiPost(url, body) { try { const r = await fetch(url, {method:'POST', headers:netHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body)}); const d = await r.json(); if (!r.ok) { showToast(d.detail||'Errore'); return null; } if (d.message) log(d.message); return d; } catch(e) { showToast(e.message); return null; } }
 function clearSel() { selectedTerritory = null; targetTerritory = null; }
 function formatName(t) { return t.replace(/_/g,' ').replace(/\b\w/g, c=>c.toUpperCase()); }
 function sleep(ms) { return new Promise(r=>setTimeout(r,ms)); }
@@ -810,6 +994,8 @@ function exitGame() {
     document.getElementById('game-screen').style.display = 'none';
     document.getElementById('setup-screen').style.display = '';
     gameState = null; gameId = null;
+    networkMode = false; isHost = false; myToken = null; myPlayerIndex = 0;
+    document.getElementById('share-box')?.remove();
 }
 
 function confirmExit() {
@@ -819,6 +1005,8 @@ function confirmExit() {
     document.getElementById('setup-screen').style.display = '';
     gameState = null; gameId = null; pendingDefense = null; pendingConquest = null;
     territoryHistory = []; gameStats = {attacks:0,conquests:0,troopsLost:0,troopsKilled:0};
+    networkMode = false; isHost = false; myToken = null; myPlayerIndex = 0;
+    document.getElementById('share-box')?.remove();
 }
 
 // ===== JSON SAVE/LOAD =====
@@ -1185,7 +1373,7 @@ let tournamentId = null, tournamentState = null;
 
 async function createTournament() {
     const total = parseInt(document.getElementById('total-players').value);
-    const humans = parseInt(document.getElementById('human-players').value);
+    const humans = 1;
     const difficulty = document.getElementById('ai-difficulty').value;
     const names = [], colors = [], aiFlags = [];
     for (let i = 0; i < humans; i++) { names.push(document.getElementById(`pname${i}`)?.value?.trim() || `Giocatore ${i+1}`); colors.push(document.getElementById(`color${i}`)?.value || COLORS[i]); aiFlags.push(false); }

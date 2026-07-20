@@ -1,7 +1,7 @@
 # 🗺️ TODO — Future Improvements
 
 ## Gameplay
-- [ ] **Multiplayer rete** — giocare da browser diversi (WebSocket già pronto, serve gestione player ID per sessione)
+- [x] **Multiplayer rete** — giocare da browser diversi: posti assegnati via /join con token per turno, enforcement server, host guida AI
 - [x] **AI più smart** — ricorda carte giocate, calcola rischio di essere attaccata, difende continenti
 - [x] **Modalità torneo** — best of 3, classifica ELO locale
 

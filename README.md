@@ -9,8 +9,10 @@ Un clone completo del gioco da tavolo **RisiKo!** giocabile nel browser, con AI 
 - **Mappa mondo interattiva** — SVG da Wikipedia con 42 territori cliccabili, zoom/pan, nomi sempre visibili
 - **Regole ufficiali italiane** — difensore 3 dadi, tris carte (4/6/8/10/12), obiettivi segreti, spostamento tra territori connessi
 - **AI intelligente** — 3 livelli × 3 personalità + memoria carte, valutazione rischio, difesa continenti, trash talk
-- **3-6 giocatori** — umani e/o CPU, hot-seat
+- **3-6 giocatori** — umani e/o CPU, hot-seat locale
+- **🌐 Multiplayer online** — lobby con codice condivisibile: ogni giocatore entra da un browser diverso, sceglie nickname e si mette "pronto"; l'host configura CPU/difficoltà e avvia. Turni validati lato server (token per posto)
 - **Lancia i dadi di difesa** — quando l'AI ti attacca, sei TU a premere il pulsante
+- **Indicatori di movimento** — linee tratteggiate rosse per gli attacchi possibili, blu per gli spostamenti
 - **Modalità Torneo** — best of 3, classifica ELO locale persistente
 - **Speed Mode** — turni da 10 secondi, chi non agisce perde il turno
 - **Achievements** — 10 obiettivi sbloccabili con notifiche popup
@@ -32,6 +34,29 @@ pip install -r requirements.txt
 ```
 
 Apri `http://localhost:8080` nel browser.
+
+## 🌐 Multiplayer Online
+
+Gioca da browser/dispositivi diversi tramite una **lobby**:
+
+1. Un giocatore preme **🌐 Crea Partita Online** → entra nella lobby, sceglie il nickname, imposta numero di CPU e difficoltà, e ottiene un **codice** (+ link condivisibile).
+2. Gli altri incollano il codice in **🔗 Unisciti con Codice** (o aprono il link) → entrano nella lobby e scelgono il nickname.
+3. Ogni giocatore preme **Sono Pronto**; quando tutti sono pronti l'**host avvia** la partita.
+
+Dettagli tecnici:
+- Ogni posto umano riceve un **token segreto**; il server valida che ogni azione arrivi dal giocatore di turno (header `X-Player-Token`).
+- Lo stato è sincronizzato in tempo reale via **WebSocket** (`/ws/{game_id}`); la lobby usa `/ws/lobby/{lobby_id}`.
+- L'**host guida i turni delle CPU**; le partite locali (hot-seat) restano invariate e senza enforcement.
+
+## 📸 Screenshots
+
+_Screenshot in arrivo (menù principale, lobby online, partita in corso). Le immagini vanno in `docs/screenshots/`._
+
+<!-- Scommentare quando le immagini sono presenti in docs/screenshots/:
+| Menù principale | Lobby online | Partita in corso |
+|---|---|---|
+| ![Menu](docs/screenshots/menu.png) | ![Lobby](docs/screenshots/lobby.png) | ![Gioco](docs/screenshots/game.png) |
+-->
 
 ### Deploy Raspberry Pi 4
 

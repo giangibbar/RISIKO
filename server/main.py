@@ -2,8 +2,9 @@
 
 import json
 import asyncio
-from typing import Dict, List
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+import secrets
+from typing import Dict, List, Optional
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException, Header, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.middleware.gzip import GZipMiddleware
@@ -33,6 +34,41 @@ games: Dict[str, GameEngine] = {}
 
 # WebSocket connections per game
 connections: Dict[str, List[WebSocket]] = {}
+
+# Network multiplayer: claimed human seats per game -> {player_index: secret_token}
+# A game with NO entries here is a local/hot-seat game and is NOT turn-enforced,
+# preserving the original single-browser behaviour.
+game_seats: Dict[str, Dict[int, str]] = {}
+
+# Pre-game lobbies: players gather, pick nicknames, ready up; host configures
+# CPU count + difficulty and starts. lobby -> dict (see create_lobby).
+lobbies: Dict[str, dict] = {}
+lobby_connections: Dict[str, List[WebSocket]] = {}
+
+# Official Risiko army colours (must match client COLORS order).
+PALETTE = ['#e63946', '#2563eb', '#2a9d8f', '#f4d35e', '#222222', '#7b2d8b']
+
+
+async def require_turn(game_id: str, x_player_token: Optional[str] = Header(default=None)):
+    """Turn enforcement for network games.
+
+    - Local games (no claimed seats): no enforcement (backward compatible).
+    - Network games: caller must hold a valid seat token, and if the current
+      player is a claimed human seat, only that seat's token may act. When the
+      current player is AI or an unclaimed seat, any participant may act (this
+      lets the host drive AI turns).
+    """
+    seats = game_seats.get(game_id)
+    if not seats:
+        return
+    if x_player_token not in seats.values():
+        raise HTTPException(403, "Non sei un partecipante di questa partita")
+    engine = games.get(game_id)
+    if engine is None:
+        return
+    current_token = seats.get(engine.game.current_player)
+    if current_token is not None and x_player_token != current_token:
+        raise HTTPException(403, "Non è il tuo turno")
 
 
 # --- Broadcast helper ---
@@ -64,7 +100,223 @@ async def create_game(req: CreateGameRequest):
     engine = GameEngine.create_game(req.player_names, req.player_colors, req.ai_players or None, req.ai_difficulty)
     games[engine.game.id] = engine
     connections[engine.game.id] = []
+    game_seats[engine.game.id] = {}
     return {"game_id": engine.game.id, "state": engine.game.model_dump()}
+
+
+@app.post("/api/games/{game_id}/join")
+async def join_game(game_id: str):
+    """Claim the next free human seat for network multiplayer.
+
+    Returns the assigned player index and a secret token used to authorise that
+    seat's actions (sent back via the X-Player-Token header)."""
+    engine = _get_engine(game_id)
+    seats = game_seats.setdefault(game_id, {})
+    for i, p in enumerate(engine.game.players):
+        if not p.is_ai and i not in seats:
+            token = secrets.token_urlsafe(16)
+            seats[i] = token
+            return {
+                "player_index": i,
+                "token": token,
+                "player": p.model_dump(),
+                "state": engine.game.model_dump(),
+            }
+    raise HTTPException(409, "Nessun posto umano libero in questa partita")
+
+
+@app.get("/api/games/{game_id}/seats")
+async def get_seats(game_id: str):
+    """List seats and whether each human seat has been claimed."""
+    engine = _get_engine(game_id)
+    seats = game_seats.get(game_id, {})
+    return {"seats": [
+        {"index": i, "name": p.name, "color": p.color,
+         "is_ai": p.is_ai, "claimed": i in seats}
+        for i, p in enumerate(engine.game.players)
+    ]}
+
+
+# --- Lobby (pre-game) ---
+
+def _get_lobby(lobby_id: str) -> dict:
+    lobby = lobbies.get(lobby_id)
+    if lobby is None:
+        raise HTTPException(404, "Lobby non trovata")
+    return lobby
+
+
+def _lobby_public(lobby: dict) -> dict:
+    """Client-safe view of a lobby (no secret tokens)."""
+    return {
+        "id": lobby["id"],
+        "settings": lobby["settings"],
+        "started": lobby["started"],
+        "game_id": lobby["game_id"],
+        "players": [
+            {"nickname": p["nickname"], "ready": p["ready"],
+             "is_host": p["is_host"], "color": PALETTE[i % len(PALETTE)]}
+            for i, p in enumerate(lobby["players"])
+        ],
+    }
+
+
+async def broadcast_lobby(lobby_id: str, extra: Optional[dict] = None):
+    """Push the updated lobby (and an optional event) to all lobby sockets."""
+    lobby = lobbies.get(lobby_id)
+    if lobby is None:
+        return
+    msg = {"type": "lobby_update", "lobby": _lobby_public(lobby)}
+    for ws in list(lobby_connections.get(lobby_id, [])):
+        try:
+            await ws.send_json(msg)
+            if extra:
+                await ws.send_json(extra)
+        except Exception:
+            pass
+
+
+@app.post("/api/lobbies")
+async def create_lobby(req: dict):
+    """Create a lobby. Body: {nickname, cpu_count?, difficulty?}. Creator is host."""
+    lobby_id = secrets.token_hex(3)  # short shareable code
+    token = secrets.token_urlsafe(16)
+    lobbies[lobby_id] = {
+        "id": lobby_id,
+        "host_token": token,
+        "settings": {
+            "cpu_count": max(0, min(5, int(req.get("cpu_count", 1)))),
+            "difficulty": req.get("difficulty", "medium"),
+        },
+        "players": [{
+            "token": token,
+            "nickname": (req.get("nickname") or "Host")[:20],
+            "ready": True,
+            "is_host": True,
+        }],
+        "started": False,
+        "game_id": None,
+    }
+    lobby_connections[lobby_id] = []
+    return {"lobby_id": lobby_id, "token": token, "player_index": 0,
+            "lobby": _lobby_public(lobbies[lobby_id])}
+
+
+@app.post("/api/lobbies/{lobby_id}/join")
+async def join_lobby(lobby_id: str, req: dict):
+    """Join a lobby with a nickname. Body: {nickname}."""
+    lobby = _get_lobby(lobby_id)
+    if lobby["started"]:
+        raise HTTPException(409, "La partita è già iniziata")
+    if len(lobby["players"]) >= 6:
+        raise HTTPException(409, "Lobby piena (max 6 giocatori)")
+    token = secrets.token_urlsafe(16)
+    idx = len(lobby["players"])
+    lobby["players"].append({
+        "token": token,
+        "nickname": (req.get("nickname") or f"Giocatore {idx + 1}")[:20],
+        "ready": False,
+        "is_host": False,
+    })
+    await broadcast_lobby(lobby_id)
+    return {"token": token, "player_index": idx, "lobby": _lobby_public(lobby)}
+
+
+@app.post("/api/lobbies/{lobby_id}/settings")
+async def update_lobby_settings(lobby_id: str, req: dict, x_player_token: Optional[str] = Header(default=None)):
+    """Host-only: change cpu_count / difficulty."""
+    lobby = _get_lobby(lobby_id)
+    if x_player_token != lobby["host_token"]:
+        raise HTTPException(403, "Solo l'host può cambiare le impostazioni")
+    if "cpu_count" in req:
+        lobby["settings"]["cpu_count"] = max(0, min(5, int(req["cpu_count"])))
+    if "difficulty" in req and req["difficulty"] in ("easy", "medium", "hard"):
+        lobby["settings"]["difficulty"] = req["difficulty"]
+    await broadcast_lobby(lobby_id)
+    return _lobby_public(lobby)
+
+
+@app.post("/api/lobbies/{lobby_id}/ready")
+async def lobby_ready(lobby_id: str, x_player_token: Optional[str] = Header(default=None)):
+    """Toggle the calling player's ready flag."""
+    lobby = _get_lobby(lobby_id)
+    for p in lobby["players"]:
+        if p["token"] == x_player_token:
+            p["ready"] = not p["ready"]
+            break
+    else:
+        raise HTTPException(403, "Non sei in questa lobby")
+    await broadcast_lobby(lobby_id)
+    return _lobby_public(lobby)
+
+
+@app.post("/api/lobbies/{lobby_id}/nickname")
+async def lobby_nickname(lobby_id: str, req: dict, x_player_token: Optional[str] = Header(default=None)):
+    """Change the calling player's nickname."""
+    lobby = _get_lobby(lobby_id)
+    new = (req.get("nickname") or "").strip()[:20]
+    for p in lobby["players"]:
+        if p["token"] == x_player_token:
+            if new:
+                p["nickname"] = new
+            break
+    else:
+        raise HTTPException(403, "Non sei in questa lobby")
+    await broadcast_lobby(lobby_id)
+    return _lobby_public(lobby)
+
+
+@app.post("/api/lobbies/{lobby_id}/start")
+async def start_lobby(lobby_id: str, x_player_token: Optional[str] = Header(default=None)):
+    """Host-only: create the game from the lobby roster and notify everyone."""
+    lobby = _get_lobby(lobby_id)
+    if x_player_token != lobby["host_token"]:
+        raise HTTPException(403, "Solo l'host può avviare la partita")
+    if lobby["started"] and lobby["game_id"]:
+        return {"game_id": lobby["game_id"]}
+    humans = lobby["players"]
+    if not all(p["ready"] for p in humans):
+        raise HTTPException(400, "Non tutti i giocatori sono pronti")
+    cpu = lobby["settings"]["cpu_count"]
+    total = len(humans) + cpu
+    if not 2 <= total <= 6:
+        raise HTTPException(400, "Servono 2-6 giocatori totali (umani + CPU)")
+
+    names, colors, ai_flags = [], [], []
+    ci = 0
+    for p in humans:
+        names.append(p["nickname"]); colors.append(PALETTE[ci]); ai_flags.append(False); ci += 1
+    for k in range(cpu):
+        names.append(f"CPU {k + 1}"); colors.append(PALETTE[ci]); ai_flags.append(True); ci += 1
+
+    engine = GameEngine.create_game(names, colors, ai_flags, lobby["settings"]["difficulty"])
+    gid = engine.game.id
+    games[gid] = engine
+    connections[gid] = []
+    # Human seats keep their lobby token, so clients are already authorised.
+    game_seats[gid] = {i: humans[i]["token"] for i in range(len(humans))}
+
+    lobby["started"] = True
+    lobby["game_id"] = gid
+    await broadcast_lobby(lobby_id, extra={"type": "game_started", "game_id": gid})
+    return {"game_id": gid}
+
+
+@app.websocket("/ws/lobby/{lobby_id}")
+async def lobby_websocket(websocket: WebSocket, lobby_id: str):
+    """Realtime lobby updates (players joining, ready changes, game start)."""
+    if lobby_id not in lobbies:
+        await websocket.close(code=4004)
+        return
+    await websocket.accept()
+    lobby_connections[lobby_id].append(websocket)
+    try:
+        await websocket.send_json({"type": "lobby_update", "lobby": _lobby_public(lobbies[lobby_id])})
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        if websocket in lobby_connections.get(lobby_id, []):
+            lobby_connections[lobby_id].remove(websocket)
 
 
 @app.get("/api/games/{game_id}")
@@ -75,7 +327,7 @@ async def get_game(game_id: str):
 
 
 @app.post("/api/games/{game_id}/setup")
-async def setup_place(game_id: str, req: PlaceTroopsRequest):
+async def setup_place(game_id: str, req: PlaceTroopsRequest, _turn: None = Depends(require_turn)):
     """Place troops during setup phase."""
     engine = _get_engine(game_id)
     player_id = engine.game.current_player
@@ -85,7 +337,7 @@ async def setup_place(game_id: str, req: PlaceTroopsRequest):
 
 
 @app.post("/api/games/{game_id}/reinforce")
-async def reinforce(game_id: str, req: PlaceTroopsRequest):
+async def reinforce(game_id: str, req: PlaceTroopsRequest, _turn: None = Depends(require_turn)):
     """Place reinforcement troops."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -95,7 +347,7 @@ async def reinforce(game_id: str, req: PlaceTroopsRequest):
 
 
 @app.post("/api/games/{game_id}/trade")
-async def trade_cards(game_id: str, req: TradeCardsRequest):
+async def trade_cards(game_id: str, req: TradeCardsRequest, _turn: None = Depends(require_turn)):
     """Trade cards for bonus troops."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -105,7 +357,7 @@ async def trade_cards(game_id: str, req: TradeCardsRequest):
 
 
 @app.post("/api/games/{game_id}/attack")
-async def attack(game_id: str, req: AttackRequest):
+async def attack(game_id: str, req: AttackRequest, _turn: None = Depends(require_turn)):
     """Execute an attack."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -121,7 +373,7 @@ async def attack(game_id: str, req: AttackRequest):
 
 
 @app.post("/api/games/{game_id}/end_attack")
-async def end_attack(game_id: str):
+async def end_attack(game_id: str, _turn: None = Depends(require_turn)):
     """End attack phase, move to fortify."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -142,7 +394,7 @@ async def get_probability(game_id: str, from_territory: str, to_territory: str):
 
 
 @app.post("/api/games/{game_id}/rapid_attack")
-async def rapid_attack(game_id: str, req: AttackRequest):
+async def rapid_attack(game_id: str, req: AttackRequest, _turn: None = Depends(require_turn)):
     """Attack repeatedly until conquest or failure."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -152,7 +404,7 @@ async def rapid_attack(game_id: str, req: AttackRequest):
 
 
 @app.post("/api/games/{game_id}/undo_reinforce")
-async def undo_reinforce(game_id: str):
+async def undo_reinforce(game_id: str, _turn: None = Depends(require_turn)):
     """Undo last reinforcement."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -162,7 +414,7 @@ async def undo_reinforce(game_id: str):
 
 
 @app.post("/api/games/{game_id}/fortify")
-async def fortify(game_id: str, req: FortifyRequest):
+async def fortify(game_id: str, req: FortifyRequest, _turn: None = Depends(require_turn)):
     """Fortify — move troops between territories."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -172,7 +424,7 @@ async def fortify(game_id: str, req: FortifyRequest):
 
 
 @app.post("/api/games/{game_id}/end_turn")
-async def end_turn(game_id: str):
+async def end_turn(game_id: str, _turn: None = Depends(require_turn)):
     """End current turn (skip fortify)."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -182,7 +434,7 @@ async def end_turn(game_id: str):
 
 
 @app.post("/api/games/{game_id}/continue")
-async def continue_game(game_id: str):
+async def continue_game(game_id: str, _turn: None = Depends(require_turn)):
     """Continue playing after objective victory (to conquer the world)."""
     engine = _get_engine(game_id)
     if engine.game.phase != GamePhase.GAME_OVER:
@@ -198,7 +450,7 @@ async def continue_game(game_id: str):
 
 
 @app.post("/api/games/{game_id}/move")
-async def move_troops(game_id: str, req: FortifyRequest):
+async def move_troops(game_id: str, req: FortifyRequest, _turn: None = Depends(require_turn)):
     """Move troops after conquest."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -208,7 +460,7 @@ async def move_troops(game_id: str, req: FortifyRequest):
 
 
 @app.post("/api/games/{game_id}/ai_turn")
-async def ai_turn(game_id: str):
+async def ai_turn(game_id: str, _turn: None = Depends(require_turn)):
     """Execute AI turn for current player (must be AI)."""
     engine = _get_engine(game_id)
     player = engine.game.players[engine.game.current_player]
@@ -221,7 +473,7 @@ async def ai_turn(game_id: str):
 
 
 @app.post("/api/games/{game_id}/ai_step")
-async def ai_step(game_id: str):
+async def ai_step(game_id: str, _turn: None = Depends(require_turn)):
     """Execute ONE AI action (for step-by-step animation)."""
     from .ai_player import ai_play_step
     engine = _get_engine(game_id)
@@ -235,7 +487,7 @@ async def ai_step(game_id: str):
 
 
 @app.post("/api/games/{game_id}/ai_declare_attack")
-async def ai_declare_attack(game_id: str):
+async def ai_declare_attack(game_id: str, _turn: None = Depends(require_turn)):
     """AI picks an attack target but doesn't resolve yet. Returns from/to for defender to roll."""
     from .ai_player import ai_pick_next_attack
     engine = _get_engine(game_id)
@@ -252,7 +504,7 @@ async def ai_declare_attack(game_id: str):
 
 
 @app.post("/api/games/{game_id}/resolve_attack")
-async def resolve_attack(game_id: str, req: AttackRequest):
+async def resolve_attack(game_id: str, req: AttackRequest, _turn: None = Depends(require_turn)):
     """Resolve a declared attack (defender confirmed roll)."""
     engine = _get_engine(game_id)
     player_id = engine.game.players[engine.game.current_player].id
@@ -269,6 +521,7 @@ async def load_game(state: dict):
     engine = GameEngine(game)
     games[game.id] = engine
     connections[game.id] = []
+    game_seats[game.id] = {}
     return {"game_id": game.id, "state": engine.game.model_dump()}
 
 
@@ -314,6 +567,7 @@ async def start_next_match(tournament_id: str):
     engine = GameEngine.create_game(names, colors, ai_flags, difficulty)
     games[engine.game.id] = engine
     connections[engine.game.id] = []
+    game_seats[engine.game.id] = {}
     t.current_game_id = engine.game.id
 
     return {"game_id": engine.game.id, "state": engine.game.model_dump(), "match_number": t.current_match + 1}

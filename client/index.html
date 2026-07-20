@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RISIKO</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚔️</text></svg>">
-    <link rel="stylesheet" href="static/style.css">
+    <link rel="stylesheet" href="static/style.css?v=5">
 </head>
 <body>
     <!-- SETUP SCREEN -->
@@ -14,16 +14,13 @@
         <p class="subtitle">Conquista il mondo — un territorio alla volta</p>
         <div class="setup-form">
             <h2>Nuova Partita</h2>
-            <label class="setup-label">Giocatori totali</label>
+            <label class="setup-label">Giocatori totali (tu + CPU)</label>
             <select id="total-players" onchange="updateSetupForm()">
+                <option value="2">2</option>
                 <option value="3" selected>3</option>
                 <option value="4">4</option>
                 <option value="5">5</option>
                 <option value="6">6</option>
-            </select>
-            <label class="setup-label">Di cui umani</label>
-            <select id="human-players" onchange="updateSetupForm()">
-                <option value="1" selected>1</option>
             </select>
             <label class="setup-label">Difficoltà CPU</label>
             <select id="ai-difficulty">
@@ -38,8 +35,31 @@
             <div id="player-names-container"></div>
             <button onclick="createGame()">🎲 Inizia Partita</button>
             <button onclick="createTournament()" class="btn-tournament">🏆 Torneo (Best of 3)</button>
+            <div class="online-section" style="margin-top:16px;border-top:1px solid #ffffff22;padding-top:14px">
+                <button onclick="createGameOnline()" class="btn-online" style="background:#2563eb">🌐 Crea Partita Online</button>
+                <div style="margin-top:16px;border-top:1px dashed #ffffff26;padding-top:12px">
+                    <label class="setup-label" style="margin-top:0">Hai un codice? Unisciti a una partita</label>
+                    <input type="text" id="join-code" placeholder="Codice partita (es. b461cf)" autocomplete="off">
+                    <button onclick="joinGame()" style="margin-top:8px">🔗 Unisciti con Codice</button>
+                </div>
+                <p style="font-size:0.72rem;color:var(--text-dim);margin-top:10px;line-height:1.4">Crea una lobby (configuri CPU/difficoltà e condividi il codice) oppure incolla il codice ricevuto per unirti. Il nickname lo scegli dentro la lobby.</p>
+            </div>
         </div>
         <div id="elo-section" class="elo-section"></div>
+    </div>
+
+    <!-- LOBBY SCREEN -->
+    <div id="lobby-screen" style="display:none">
+        <div class="setup-form lobby-card">
+            <h2>🌐 Lobby Online</h2>
+            <div id="lobby-code-box"></div>
+            <div id="lobby-nick-box"></div>
+            <div class="lobby-cols">
+                <div class="lobby-col"><h3 style="margin:10px 0 4px">Impostazioni</h3><div id="lobby-settings"></div></div>
+                <div class="lobby-col"><h3 style="margin:10px 0 4px">Giocatori collegati</h3><div id="lobby-players"></div></div>
+            </div>
+            <div id="lobby-actions" style="margin-top:12px"></div>
+        </div>
     </div>
 
     <!-- GAME SCREEN -->
@@ -110,9 +130,9 @@
     <!-- Toast -->
     <div id="toast"></div>
 
-    <script src="static/sounds.js"></script>
-    <script src="static/dice.js"></script>
-    <script src="static/app.js"></script>
+    <script src="static/sounds.js?v=5"></script>
+    <script src="static/dice.js?v=5"></script>
+    <script src="static/app.js?v=5"></script>
     <script>
         fetch('static/assets/world.svg')
             .then(r => r.text())
