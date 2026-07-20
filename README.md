@@ -48,16 +48,6 @@ Dettagli tecnici:
 - Lo stato è sincronizzato in tempo reale via **WebSocket** (`/ws/{game_id}`); la lobby usa `/ws/lobby/{lobby_id}`.
 - L'**host guida i turni delle CPU**; le partite locali (hot-seat) restano invariate e senza enforcement.
 
-## 📸 Screenshots
-
-_Screenshot in arrivo (menù principale, lobby online, partita in corso). Le immagini vanno in `docs/screenshots/`._
-
-<!-- Scommentare quando le immagini sono presenti in docs/screenshots/:
-| Menù principale | Lobby online | Partita in corso |
-|---|---|---|
-| ![Menu](docs/screenshots/menu.png) | ![Lobby](docs/screenshots/lobby.png) | ![Gioco](docs/screenshots/game.png) |
--->
-
 ### Deploy Raspberry Pi 4
 
 Gira come servizio systemd su porta 8081 con ottimizzazioni per ARM64:
